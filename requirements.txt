@@ -1,5 +1,5 @@
 pyrogram>=2.0.106
-py-tgcalls>=2.3.3
+py-tgcalls==2.2.11  # 2.3.x needs unreleased pyrogram git; 2.2.11 works with 2.0.106 + compat shim in main.py
 yt-dlp>=2024.8.6
 aiosqlite>=0.20.0
 python-dotenv>=1.0.1

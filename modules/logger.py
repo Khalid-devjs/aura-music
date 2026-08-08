@@ -14,6 +14,12 @@ LOG_FILE = os.path.join(LOG_DIR, "musicbot.log")
 
 
 def setup_logging() -> logging.Logger:
+    # idempotent — safe to call from multiple modules
+    root = logging.getLogger()
+    if getattr(root, "_auramusic_configured", False):
+        return logging.getLogger("auramusic")
+    root._auramusic_configured = True
+
     os.makedirs(LOG_DIR, exist_ok=True)
     root = logging.getLogger()
     root.setLevel(logging.INFO)

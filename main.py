@@ -8,6 +8,18 @@ Two Pyrogram clients:
 """
 import asyncio
 
+# ---- compat shim: py-tgcalls 2.3.x expects exceptions absent from pyrogram 2.0.106 ----
+import pyrogram.errors as _pyro_errors
+from pyrogram.errors import RPCError as _RPCError
+
+for _name in ("GroupcallForbidden", "GroupcallInvalid"):
+    if not hasattr(_pyro_errors, _name):
+        setattr(
+            _pyro_errors,
+            _name,
+            type(_name, (_RPCError,), {"ID": _name.upper(), "CODE": 400, "VALUE": 0}),
+        )
+
 from pyrogram import Client
 
 import config

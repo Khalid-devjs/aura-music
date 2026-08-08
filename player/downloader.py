@@ -8,13 +8,15 @@ import asyncio
 import os
 import time
 
+import logging
+
 import yt_dlp
 from pyrogram.types import Message
 
 import config
 from player.manager import Track
 
-logger = __import__("modules.logger", fromlist=["x"]).setup_logging()
+logger = logging.getLogger("auramusic")
 
 
 def _sanitize(name: str) -> str:
