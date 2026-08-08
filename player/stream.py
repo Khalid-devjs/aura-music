@@ -123,7 +123,18 @@ class Streamer:
                 manager.set_paused(chat_id, False)
             except Exception as e2:
                 logger.error("rejoin failed in %s: %s", chat_id, e2)
-                manager.set_current(chat_id, None)
+                old = self._playing_file.pop(chat_id, None)
+                downloader.delete_file(old)
+                manager.stop(chat_id)
+                try:
+                    await self.app.send_message(
+                        chat_id,
+                        "❌ **Could not start playback.**\n\n"
+                        "Make sure the **boss bot** is an admin here, the voice chat is open, "
+                        f"and the streamer is a member.\n`{e2}`",
+                    )
+                except Exception:
+                    pass
 
     async def play_track(self, chat_id: int, track: Track) -> bool:
         """Play immediately (queue start) or queue if already playing."""

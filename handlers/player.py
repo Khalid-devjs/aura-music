@@ -19,6 +19,22 @@ logger = logging.getLogger("auramusic")
 
 PROCESSING = "⏳ **Processing your request…**"
 
+GROUP_ONLY_MSG = (
+    "🎧 This command works in a **group** only!\n\n"
+    "Add me to a group, open its **voice chat**, and use it there."
+)
+
+
+async def _group_only(message: Message) -> bool:
+    """True when used inside a group/supergroup; otherwise replies and returns False."""
+    if is_group(str(message.chat.type)):
+        return True
+    try:
+        await message.reply(GROUP_ONLY_MSG)
+    except Exception:
+        pass
+    return False
+
 
 def register(app: Client) -> None:
     # ------------------------------------------------------------------
@@ -60,8 +76,18 @@ def register(app: Client) -> None:
             await message.reply("🚫 Streaming is **disabled** in this group.")
             return
 
+        # commands/menu work in groups only — the streamer needs a voice chat to join
+        if not is_group(str(message.chat.type)):
+            await message.reply(
+                "🎧 This works in a **group** only!\n\n"
+                "Add me to a group, open its **voice chat**, then tap **🎵 Play Music** there.\n\n"
+                "Or browse your **💾 Saved library** below:",
+                reply_markup=kb.saved_hint_kb(),
+            )
+            return
+
         # boss bot auto-adds the streamer userbot if it's missing from the group
-        if is_group(str(message.chat.type)) and not await _ensure_streamer_in_chat(target_chat):
+        if not await _ensure_streamer_in_chat(target_chat):
             await message.reply("⚠️ I couldn't add the **streamer** to this group.\n\nMake the **boss bot** an admin first (Admin rights → Add members), then try again.")
             return
 
@@ -139,6 +165,8 @@ def register(app: Client) -> None:
 
     @app.on_message(filters.command(["loop"], prefixes=["/", "!"]))
     async def loop_cmd(client: Client, message: Message):
+        if not await _group_only(message):
+            return
         if not await _is_controller(message):
             return
         st = manager.get(message.chat.id)
@@ -147,6 +175,8 @@ def register(app: Client) -> None:
 
     @app.on_message(filters.command(["volume"], prefixes=["/", "!"]))
     async def volume_cmd(client: Client, message: Message):
+        if not await _group_only(message):
+            return
         if not await _is_controller(message):
             return
         parts = message.text.split()
@@ -159,11 +189,15 @@ def register(app: Client) -> None:
 
     @app.on_message(filters.command(["queue", "q"], prefixes=["/", "!"]))
     async def queue_cmd(client: Client, message: Message):
+        if not await _group_only(message):
+            return
         await _show_queue(message, page=1)
 
     @app.on_message(filters.command(["remove", "rm"], prefixes=["/", "!"]))
     async def remove_cmd(client: Client, message: Message):
         """👑 Remove a queued track by its queue number (see /queue)."""
+        if not await _group_only(message):
+            return
         if not await _is_controller(message):
             return
         parts = message.text.split()
@@ -184,6 +218,8 @@ def register(app: Client) -> None:
     @app.on_message(filters.command(["leavevc", "stopvc", "leave"], prefixes=["/", "!"]))
     async def leavevc_cmd(client: Client, message: Message):
         """👑 Leave the voice chat entirely (ends the call)."""
+        if not await _group_only(message):
+            return
         if not await _is_controller(message):
             return
         await ctx.STREAMER.leave(message.chat.id)
@@ -518,13 +554,27 @@ async def _ensure_streamer_in_chat(chat_id: int) -> bool:
     try:
         await ctx.BOT_APP.add_chat_members(chat_id, ctx.USER_APP.me.id)
         await asyncio.sleep(1.5)
-        await ctx.BOT_APP.promote_chat_member(
-            chat_id,
-            ctx.USER_APP.me.id,
-            can_manage_voice_chats=True,
-            can_manage_video_chats=True,
-            can_invite_users=True,
-        )
+        # prime the userbot's peer cache so PyTgCalls can interact with the chat
+        primed = False
+        for _ in range(3):
+            try:
+                await ctx.USER_APP.get_chat(chat_id)
+                primed = True
+                break
+            except Exception:
+                await asyncio.sleep(1)
+        if not primed:
+            return False
+        try:
+            await ctx.BOT_APP.promote_chat_member(
+                chat_id,
+                ctx.USER_APP.me.id,
+                can_manage_voice_chats=True,
+                can_manage_video_chats=True,
+                can_invite_users=True,
+            )
+        except Exception:
+            pass  # promotion is best-effort; streaming still works without it
         _streamer_ok_chats.add(chat_id)
         return True
     except Exception as e:
@@ -562,6 +612,8 @@ async def _is_controller(obj, alert: bool = True) -> bool:
 
 async def _admin_op(message: Message, op):
     """Run an admin-only player op; reply with the result."""
+    if not await _group_only(message):
+        return
     if not await _is_controller(message):
         return
     chat_id = message.chat.id
