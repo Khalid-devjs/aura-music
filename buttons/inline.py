@@ -52,6 +52,7 @@ def player_kb(state: dict) -> InlineKeyboardMarkup:
         _row(pause_btn, _btn("⏭️ Skip", "pl:skip")),
         _row(_btn("⏹️ Stop", "pl:stop"), _btn("🔊 Volume", "pl:vol")),
         _row(_btn("📜 Queue", "pl:queue"), _btn(loop_txt, "pl:loop")),
+        _row(_btn("💾 Saved", "main:saved")),
     ]
     if state.get("has_queue"):
         kb.append(_row(_btn("⏯️ Next ▶️", "pl:next")))
@@ -92,6 +93,16 @@ def queue_kb(page: int, total_pages: int, is_admin: bool = False) -> InlineKeybo
 # --------------------------------------------------------------------------
 def _short(s: str, n: int = 26) -> str:
     return s if len(s) <= n else s[: n - 1] + "…"
+
+
+def saved_hint_kb() -> InlineKeyboardMarkup:
+    """Quick access to the Saved library (shown wherever a 'how to play' hint appears)."""
+    return InlineKeyboardMarkup(
+        [
+            _row(_btn("💾 Saved Library", "main:saved")),
+            _row(_btn("❌ Close", "main:close")),
+        ]
+    )
 
 
 def saved_kb(items, page: int, total_pages: int) -> InlineKeyboardMarkup:

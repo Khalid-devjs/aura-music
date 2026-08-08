@@ -88,12 +88,17 @@ def register(app: Client) -> None:
         if not user or not await guard.can_use_bot(ctx.DB, user.id):
             return
         if not is_group(str(message.chat.type)):
-            await message.reply("🎧 Use this in a **group** to start streaming!")
+            await message.reply(
+                "🎧 Use this in a **group** to start streaming!\n\n"
+                "Or browse your **💾 Saved library** below — replay any track in a group voice chat:",
+                reply_markup=kb.saved_hint_kb(),
+            )
             return
         parts = message.text.split(maxsplit=1)
         if len(parts) < 2:
             await message.reply(
-                "🎵 Usage: `/play <song name or link>`\n🎬 Video: `/vplay <song or link>`"
+                "🎵 Usage: `/play <song name or link>`\n🎬 Video: `/vplay <song or link>`\n💾 Or pick from the **Saved library**:",
+                reply_markup=kb.saved_hint_kb(),
             )
             return
         status = await message.reply(PROCESSING)
