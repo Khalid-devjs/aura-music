@@ -11,6 +11,7 @@ import random
 
 from pyrogram import Client
 from pyrogram.raw.functions.phone import CreateGroupCall
+from pyrogram.raw.types import GroupCall, InputGroupCall, UpdateGroupCall
 from pytgcalls import PyTgCalls
 from pytgcalls.types import ChatUpdate, GroupCallConfig, MediaStream, StreamEnded, Update
 from pytgcalls.types.stream import AudioQuality, VideoQuality
@@ -105,11 +106,12 @@ class Streamer:
 
     # ------------------------------------------------------------------
     async def _call_active(self, chat_id: int) -> bool:
-        """True when a voice/video chat is actually running in the group.
+        """True when a voice/video chat is actually RUNNING in the group.
 
-        Uses raw MTProto: ChatFull.call is a GroupCall when a call is live,
-        None when no (or ended) call. Supergroups = GetFullChannel, basic
-        groups = GetFullChat.
+        ChatFull.call is unreliable: dead calls linger there for a while and
+        freshly created calls take 10+s to appear. So after reading the call
+        we VERIFY it with GetGroupCall — Telegram answers GROUPCALL_INVALID
+        for a discarded call, so an exception here means "not joinable".
         """
         try:
             from pyrogram.raw import functions
@@ -122,22 +124,67 @@ class Streamer:
                 full = await self.app.invoke(functions.messages.GetFullChat(chat_id=peer.chat_id))
             else:
                 return False
-            return getattr(full, "call", None) is not None
+            call = getattr(full, "call", None)
+            if call is None:
+                return False
+            # verify the call is actually joinable (not discarded)
+            await self.app.invoke(functions.phone.GetGroupCall(call=call, limit=0))
+            return True
         except Exception:
             return False
 
-    async def _ensure_call(self, chat_id: int) -> None:
-        """Create the group voice chat if none is active (auto-start call)."""
+    async def _ensure_call(self, chat_id: int) -> bool:
+        """Create the group voice chat if none is active (auto-start call).
+
+        Returns True when a call is joinable (either already running or
+        freshly created). The fresh call ID from the CreateGroupCall response
+        is injected straight into py-tgcalls' group-call cache, because
+        GetFullChannel lags 10+s behind reality — waiting for it makes the
+        very next join fail GROUPCALL_INVALID.
+        """
         if await self._call_active(chat_id):
-            return
-        await self.app.invoke(
+            # a call is verified live — make sure the cache holds the LIVE
+            # ID (a stale cached ID from a previous session would otherwise
+            # make the join fail GROUPCALL_INVALID)
+            try:
+                from pyrogram.raw import functions
+                from pyrogram.raw.types import InputPeerChannel
+
+                peer = await self.app.resolve_peer(chat_id)
+                if isinstance(peer, InputPeerChannel):
+                    full = await self.app.invoke(functions.channels.GetFullChannel(channel=peer))
+                    call = getattr(full, "call", None)
+                    if call is not None:
+                        self.pytgcalls._app._bind_client._cache.set_cache(
+                            chat_id,
+                            InputGroupCall(id=call.id, access_hash=call.access_hash),
+                        )
+            except Exception:
+                pass
+            return True
+        result = await self.app.invoke(
             CreateGroupCall(
                 peer=await self.app.resolve_peer(chat_id),
-                random_id=random.randint(1, 2**31),
+                random_id=random.getrandbits(31),
                 rtmp_stream=False,
             )
         )
+        # pull the freshly created call out of the response updates
+        fresh_call = None
+        for update in result.updates:
+            if isinstance(update, UpdateGroupCall) and isinstance(update.call, GroupCall):
+                fresh_call = InputGroupCall(
+                    id=update.call.id,
+                    access_hash=update.call.access_hash,
+                )
+                break
+        if fresh_call is not None:
+            try:
+                self.pytgcalls._app._bind_client._cache.set_cache(chat_id, fresh_call)
+            except Exception:
+                pass
         await asyncio.sleep(2.5)  # let the call actually start
+        return fresh_call is not None
 
     async def _safe_play(self, chat_id: int, track: Track) -> None:
         try:
@@ -168,9 +215,10 @@ class Streamer:
                     # Drop py-tgcalls' internal group-call cache: after a call
                     # dies externally it still holds the DEAD call ID, and
                     # JoinGroupCall keeps failing GROUPCALL_INVALID on it even
-                    # after we create a fresh call.
+                    # after we create a fresh call. NOTE: the cache lives on
+                    # the bridged client (_bind_client), NOT on MtProtoClient.
                     try:
-                        self.pytgcalls._app._cache.drop_cache(chat_id)
+                        self.pytgcalls._app._bind_client._cache.drop_cache(chat_id)
                     except Exception:
                         pass
                     # leave quietly — GROUPCALL_FORBIDDEN (not a participant)
@@ -183,8 +231,16 @@ class Streamer:
                             attempt + 1, chat_id, leave_e,
                         )
                     await asyncio.sleep(3)  # let the old call fully die
-                    if not await self._call_active(chat_id):
+                    # ALWAYS create a fresh call on retry (injects its ID
+                    # straight into py-tgcalls' cache) — do not trust
+                    # _call_active here, it only probes ChatFull which lags.
+                    try:
                         await self._ensure_call(chat_id)
+                    except Exception as ensure_e:
+                        logger.warning(
+                            "ensure_call retry %d in %s: %s",
+                            attempt + 1, chat_id, ensure_e,
+                        )
                     await asyncio.sleep(3)  # propagation before joining
                     await self.pytgcalls.play(
                         chat_id,
