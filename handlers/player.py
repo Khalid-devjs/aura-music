@@ -401,7 +401,7 @@ def register(app: Client) -> None:
             return
 
         if not await _ensure_streamer_in_chat(cb.message.chat.id):
-            await cb.answer("⚠️ Couldn't add the streamer to this group. Make the boss bot admin!", show_alert=True)
+            await cb.answer("⚠️ Couldn't add the streamer to this group. Make the bot admin!", show_alert=True)
             return
 
         track_id = int(parts[2])
@@ -540,17 +540,20 @@ _streamer_ok_chats: set = set()
 
 
 async def _ensure_streamer_in_chat(chat_id: int) -> bool:
-    """Make sure the streaming userbot is a member of the group.
+    """Make sure the streaming userbot is a member AND admin of the group.
 
-    If it is missing, the BOSS bot auto-adds it and promotes it
-    (manage voice chats) so streaming just works. Returns True on success.
+    If it is missing, the bot auto-adds it (invite-link fallback), then
+    ALWAYS promotes it (manage voice chats) so it can start the group call.
+    Returns True on success.
     """
     if chat_id in _streamer_ok_chats:
         return True
+    is_member = False
     try:
-        await ctx.USER_APP.get_chat_member(chat_id, "me")
-        _streamer_ok_chats.add(chat_id)
-        return True
+        member = await ctx.USER_APP.get_chat_member(chat_id, "me")
+        status = str(member.status).split(".")[-1].lower()
+        if status in ("member", "administrator", "creator"):
+            is_member = True
     except Exception:
         pass  # userbot not a member (or chat is a private DM — ignore)
     # Only auto-add inside groups/supergroups
@@ -561,53 +564,55 @@ async def _ensure_streamer_in_chat(chat_id: int) -> bool:
             return True
     except Exception:
         return False
-    try:
+    if not is_member:
         try:
-            await ctx.BOT_APP.add_chat_members(chat_id, ctx.USER_APP.me.id)
-        except Exception as e:
-            # bots can't add members to supergroups (BOT_METHOD_INVALID) —
-            # try an invite-link join (works unless the streamer is banned)
-            logger.warning("add_chat_members failed in %s (%s) — trying invite link", chat_id, e)
             try:
-                link = await ctx.BOT_APP.create_chat_invite_link(chat_id, member_limit=1)
-                await ctx.USER_APP.join_chat(link.invite_link)
-            except Exception as e2:
-                logger.warning("invite-link join failed in %s: %s", chat_id, e2)
-                raise
-        await asyncio.sleep(1.5)
-        # prime the userbot's peer cache so PyTgCalls can interact with the chat
-        primed = False
-        for _ in range(3):
-            try:
-                await ctx.USER_APP.get_chat(chat_id)
-                primed = True
-                break
-            except Exception:
-                await asyncio.sleep(1)
-        if not primed:
-            return False
-        try:
-            await ctx.BOT_APP.promote_chat_member(
-                chat_id,
-                ctx.USER_APP.me.id,
-                can_manage_voice_chats=True,
-                can_manage_video_chats=True,
-                can_invite_users=True,
-            )
+                await ctx.BOT_APP.add_chat_members(chat_id, ctx.USER_APP.me.id)
+            except Exception as e:
+                # bots can't add members to supergroups (BOT_METHOD_INVALID) —
+                # try an invite-link join (works unless the streamer is banned)
+                logger.warning("add_chat_members failed in %s (%s) — trying invite link", chat_id, e)
+                try:
+                    link = await ctx.BOT_APP.create_chat_invite_link(chat_id, member_limit=1)
+                    await ctx.USER_APP.join_chat(link.invite_link)
+                except Exception as e2:
+                    logger.warning("invite-link join failed in %s: %s", chat_id, e2)
+                    raise
             await asyncio.sleep(0.5)
-            try:
-                member = await ctx.BOT_APP.get_chat_member(chat_id, ctx.USER_APP.me.id)
-                if str(member.status).split(".")[-1].lower() != "administrator":
-                    logger.warning("streamer NOT admin after promote in %s — bot may lack 'manage voice chats' right", chat_id)
-            except Exception:
-                pass
+            # prime the userbot's peer cache so PyTgCalls can interact with the chat
+            primed = False
+            for _ in range(3):
+                try:
+                    await ctx.USER_APP.get_chat(chat_id)
+                    primed = True
+                    break
+                except Exception:
+                    await asyncio.sleep(0.5)
+            if not primed:
+                return False
         except Exception as e:
-            logger.warning("promote failed in %s: %s", chat_id, e)
-        _streamer_ok_chats.add(chat_id)
-        return True
+            logger.warning("auto-add streamer failed in %s: %s", chat_id, e)
+            return False
+    # ALWAYS ensure admin — needed to create/start the group call
+    try:
+        await ctx.BOT_APP.promote_chat_member(
+            chat_id,
+            ctx.USER_APP.me.id,
+            can_manage_voice_chats=True,
+            can_manage_video_chats=True,
+            can_invite_users=True,
+        )
+        await asyncio.sleep(0.3)
+        try:
+            member = await ctx.BOT_APP.get_chat_member(chat_id, ctx.USER_APP.me.id)
+            if str(member.status).split(".")[-1].lower() != "administrator":
+                logger.warning("streamer NOT admin after promote in %s — bot may lack 'manage voice chats' right", chat_id)
+        except Exception:
+            pass
     except Exception as e:
-        logger.warning("auto-add streamer failed in %s: %s", chat_id, e)
-        return False
+        logger.warning("promote failed in %s: %s", chat_id, e)
+    _streamer_ok_chats.add(chat_id)
+    return True
 
 
 async def _is_controller(obj, alert: bool = True) -> bool:
