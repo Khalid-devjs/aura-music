@@ -9,7 +9,7 @@ from pyrogram import Client, filters
 from pyrogram.types import CallbackQuery, Message
 
 from buttons import inline as kb
-from handlers.context import DB, STREAMER, START_TIME, pending
+from handlers import context as ctx
 from modules import filters as guard
 from modules.helpers import ensure_int, log_event, safe_edit
 from modules.ratelimit import rate_limited
@@ -51,28 +51,28 @@ def register(app: Client) -> None:
             await safe_edit(cb.message, _system_info(), kb.owner_menu())
             return
         if action == "ban":
-            pending.set(user.id, "owner_ban_user", chat_id=0)
+            ctx.pending.set(user.id, "owner_ban_user", chat_id=0)
             await cb.answer()
             await safe_edit(cb.message, "🚫 **Ban User**\n\nSend the user's **ID** or **username**.")
             return
         if action == "unban":
-            pending.set(user.id, "owner_unban_user", chat_id=0)
+            ctx.pending.set(user.id, "owner_unban_user", chat_id=0)
             await cb.answer()
             await safe_edit(cb.message, "✅ **Unban User**\n\nSend the user's **ID** or **username**.")
             return
         if action == "ban_group":
-            pending.set(user.id, "owner_ban_group", chat_id=0)
+            ctx.pending.set(user.id, "owner_ban_group", chat_id=0)
             await cb.answer()
             await safe_edit(cb.message, "🚫 **Ban Group**\n\nSend the group's chat **ID**.")
             return
         if action == "unban_group":
-            pending.set(user.id, "owner_unban_group", chat_id=0)
+            ctx.pending.set(user.id, "owner_unban_group", chat_id=0)
             await cb.answer()
             await safe_edit(cb.message, "✅ **Unban Group**\n\nSend the group's chat **ID**.")
             return
         if action == "admins":
             await cb.answer()
-            admins = await DB.all_admins()
+            admins = await ctx.DB.all_admins()
             lines = [f"👑 **Owner:** `{config_owner()}`"]
             lines += [f"👤 {a['user_id']}" for a in admins] or ["_(no extra admins)_"]
             await safe_edit(cb.message, "👥 **Admins**\n\n" + "\n".join(lines), kb.owner_menu())
@@ -103,13 +103,13 @@ def register(app: Client) -> None:
             )
             return
 
-    # ---- pending owner inputs (private) ----
+    # ---- ctx.pending owner inputs (private) ----
     @app.on_message(filters.private, group=4)
     async def owner_input(client: Client, message: Message):
         user = message.from_user
         if not guard.is_owner(user.id) or not message.text:
             return
-        req = pending.pop(user.id)
+        req = ctx.pending.pop(user.id)
         if not req:
             return
         action = req["action"]
@@ -122,11 +122,11 @@ def register(app: Client) -> None:
                 await message.reply("❌ Send a numeric user **ID**.")
                 return
             if action == "owner_ban_user":
-                await DB.ban_user(target, user.id)
+                await ctx.DB.ban_user(target, user.id)
                 await message.reply(f"🚫 User `{target}` banned.")
                 await log_event(app, f"🚫 {target} banned by owner")
             else:
-                await DB.unban_user(target)
+                await ctx.DB.unban_user(target)
                 await message.reply(f"✅ User `{target}` unbanned.")
             return
 
@@ -137,14 +137,14 @@ def register(app: Client) -> None:
                 await message.reply("❌ Send a numeric group **ID**.")
                 return
             if action == "owner_ban_group":
-                await DB.blacklist_group(target, user.id)
+                await ctx.DB.blacklist_group(target, user.id)
                 try:
                     await app.leave_chat(target)
                 except Exception:
                     pass
                 await message.reply(f"🚫 Group `{target}` banned.")
             else:
-                await DB.whitelist_group(target)
+                await ctx.DB.whitelist_group(target)
                 await message.reply(f"✅ Group `{target}` unbanned.")
             return
 
@@ -156,7 +156,7 @@ def config_owner():
 
 
 async def _list_users(cb: CallbackQuery):
-    rows = await DB.all_users()
+    rows = await ctx.DB.all_users()
     if not rows:
         await safe_edit(cb.message, "👥 **No users yet.**", kb.owner_menu())
         return
@@ -171,7 +171,7 @@ async def _list_users(cb: CallbackQuery):
 
 
 async def _list_groups(cb: CallbackQuery):
-    rows = await DB.all_groups()
+    rows = await ctx.DB.all_groups()
     if not rows:
         await safe_edit(cb.message, "👥 **No groups yet.**", kb.owner_menu())
         return
@@ -185,7 +185,7 @@ async def _list_groups(cb: CallbackQuery):
 
 
 async def _active_vcs(cb: CallbackQuery):
-    calls = await STREAMER.active_calls()
+    calls = await ctx.STREAMER.active_calls()
     if not calls:
         await safe_edit(cb.message, "🎧 **No active voice chats.**", kb.owner_menu())
         return
@@ -196,13 +196,13 @@ async def _active_vcs(cb: CallbackQuery):
 
 
 def _system_info() -> str:
-    uptime = int(time.time() - START_TIME)
+    uptime = int(time.time() - ctx.START_TIME)
     h, rem = divmod(uptime, 3600)
     m, s = divmod(rem, 60)
     cpu = psutil.cpu_percent(interval=None)
     mem = psutil.virtual_memory()
     disk = psutil.disk_usage(".")
-    active = len(STREAMER.active_calls()) if STREAMER else 0
+    active = len(ctx.STREAMER.active_calls()) if ctx.STREAMER else 0
     return (
         "🖥️ **System Information**\n\n"
         f"⏱ **Bot uptime:** {h}h {m}m {s}s\n"

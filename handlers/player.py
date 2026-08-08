@@ -6,7 +6,7 @@ from pyrogram.types import CallbackQuery, Message
 
 import config
 from buttons import inline as kb
-from handlers.context import DB, STREAMER, pending
+from handlers import context as ctx
 from modules import filters as guard
 from modules.helpers import is_group, log_event, safe_edit
 from modules.ratelimit import rate_limited
@@ -27,12 +27,12 @@ def register(app: Client) -> None:
     )
     async def on_user_input(client: Client, message: Message):
         user = message.from_user
-        if not user or not await guard.can_use_bot(DB, user.id):
+        if not user or not await guard.can_use_bot(ctx.DB, user.id):
             return
-        req = pending.pop(user.id)
+        req = ctx.pending.pop(user.id)
         if not req:
-            # no pending request — but still register the user
-            await DB.add_user(user.id, user.username or "", user.first_name or "")
+            # no ctx.pending request — but still register the user
+            await ctx.DB.add_user(user.id, user.username or "", user.first_name or "")
             return
         action = req["action"]
         target_chat = req["data"].get("chat_id") or message.chat.id
@@ -53,7 +53,7 @@ def register(app: Client) -> None:
             return
 
         # check per-group streaming setting
-        if is_group(str(message.chat.type)) and not await DB.is_group_streaming_enabled(target_chat):
+        if is_group(str(message.chat.type)) and not await ctx.DB.is_group_streaming_enabled(target_chat):
             await message.reply("🚫 Streaming is **disabled** in this group.")
             return
 
@@ -74,7 +74,7 @@ def register(app: Client) -> None:
 
         # enqueue & play
         added = await _enqueue(target_chat, track, app, status, message)
-        await DB.bump_stat("video_plays" if is_video else "total_plays")
+        await ctx.DB.bump_stat("video_plays" if is_video else "total_plays")
 
     # ------------------------------------------------------------------
     # Direct commands: /play, /vplay, /pause, /resume, /skip, /stop, /loop, /volume, /queue
@@ -82,7 +82,7 @@ def register(app: Client) -> None:
     @app.on_message(filters.command(["play", "vplay"], prefixes=["/", "!"]))
     async def play_cmd(client: Client, message: Message):
         user = message.from_user
-        if not user or not await guard.can_use_bot(DB, user.id):
+        if not user or not await guard.can_use_bot(ctx.DB, user.id):
             return
         if not is_group(str(message.chat.type)):
             await message.reply("🎧 Use this in a **group** to start streaming!")
@@ -102,15 +102,15 @@ def register(app: Client) -> None:
             await safe_edit(status, f"❌ **Could not load media.**\n\n`{truncate(str(e), 200)}`")
             return
         await _enqueue(message.chat.id, track, app, status, message)
-        await DB.bump_stat("video_plays" if track.is_video else "total_plays")
+        await ctx.DB.bump_stat("video_plays" if track.is_video else "total_plays")
 
     @app.on_message(filters.command(["pause"], prefixes=["/", "!"]))
     async def pause_cmd(client: Client, message: Message):
-        await _admin_op(message, STREAMER.pause)
+        await _admin_op(message, ctx.STREAMER.pause)
 
     @app.on_message(filters.command(["resume"], prefixes=["/", "!"]))
     async def resume_cmd(client: Client, message: Message):
-        await _admin_op(message, STREAMER.resume)
+        await _admin_op(message, ctx.STREAMER.resume)
 
     @app.on_message(filters.command(["skip"], prefixes=["/", "!"]))
     async def skip_cmd(client: Client, message: Message):
@@ -118,7 +118,7 @@ def register(app: Client) -> None:
 
     @app.on_message(filters.command(["stop"], prefixes=["/", "!"]))
     async def stop_cmd(client: Client, message: Message):
-        await _admin_op(message, STREAMER.stop)
+        await _admin_op(message, ctx.STREAMER.stop)
 
     @app.on_message(filters.command(["loop"], prefixes=["/", "!"]))
     async def loop_cmd(client: Client, message: Message):
@@ -137,7 +137,7 @@ def register(app: Client) -> None:
             vol = int(parts[1])
         except (IndexError, ValueError):
             vol = config.DEFAULT_VOLUME
-        vol = await STREAMER.set_volume(message.chat.id, vol)
+        vol = await ctx.STREAMER.set_volume(message.chat.id, vol)
         await message.reply(f"🔊 Volume set to **{vol}**")
 
     @app.on_message(filters.command(["queue", "q"], prefixes=["/", "!"]))
@@ -151,7 +151,7 @@ def register(app: Client) -> None:
     @rate_limited
     async def player_cb(client: Client, cb: CallbackQuery):
         user = cb.from_user
-        if not await guard.can_use_bot(DB, user.id):
+        if not await guard.can_use_bot(ctx.DB, user.id):
             await cb.answer("🚫 Banned.", show_alert=True)
             return
         if not await _is_controller(cb):
@@ -160,10 +160,10 @@ def register(app: Client) -> None:
         chat_id = cb.message.chat.id
 
         if action == "pause":
-            await STREAMER.pause(chat_id)
+            await ctx.STREAMER.pause(chat_id)
             await _refresh_player(cb.message)
         elif action == "resume":
-            await STREAMER.resume(chat_id)
+            await ctx.STREAMER.resume(chat_id)
             await _refresh_player(cb.message)
         elif action == "skip":
             await cb.answer("⏭️ Skipping…")
@@ -174,7 +174,7 @@ def register(app: Client) -> None:
             await _do_skip(chat_id)
             await _refresh_player(cb.message)
         elif action == "stop":
-            await STREAMER.stop(chat_id)
+            await ctx.STREAMER.stop(chat_id)
             await safe_edit(
                 cb.message, "⏹️ **Playback stopped.** Queue cleared. See you next time! 🎧", kb.close_only()
             )
@@ -210,19 +210,19 @@ def register(app: Client) -> None:
         if action == "nop":
             await cb.answer()
         elif action == "-10":
-            vol = await STREAMER.set_volume(chat_id, st.volume - 10)
+            vol = await ctx.STREAMER.set_volume(chat_id, st.volume - 10)
             await cb.answer(f"🔉 Volume: {vol}")
             await safe_edit(cb.message, f"🔊 **Volume Control**\n\nCurrent: **{vol}**", kb.volume_kb(vol))
         elif action == "+10":
-            vol = await STREAMER.set_volume(chat_id, st.volume + 10)
+            vol = await ctx.STREAMER.set_volume(chat_id, st.volume + 10)
             await cb.answer(f"🔊 Volume: {vol}")
             await safe_edit(cb.message, f"🔊 **Volume Control**\n\nCurrent: **{vol}**", kb.volume_kb(vol))
         elif action == "mute":
-            await STREAMER.set_volume(chat_id, 0)
+            await ctx.STREAMER.set_volume(chat_id, 0)
             await cb.answer("🔇 Muted")
             await safe_edit(cb.message, "🔇 **Muted**", kb.volume_kb(0))
         elif action == "unmute":
-            vol = await STREAMER.set_volume(chat_id, config.DEFAULT_VOLUME)
+            vol = await ctx.STREAMER.set_volume(chat_id, config.DEFAULT_VOLUME)
             await cb.answer("🔈 Unmuted")
             await safe_edit(cb.message, f"🔊 **Volume Control**\n\nCurrent: **{vol}**", kb.volume_kb(vol))
         elif action == "back":
@@ -239,7 +239,7 @@ async def _enqueue(chat_id: int, track: Track, app, status: Message, message: Me
         return pos
 
     # start playback
-    started = await STREAMER.play_track(chat_id, track)
+    started = await ctx.STREAMER.play_track(chat_id, track)
     if not started:
         await safe_edit(status, "❌ Could not start playback. Try again.")
         return 0
@@ -292,17 +292,17 @@ async def _do_skip(chat_id: int):
 
     old = None
     try:
-        old = STREAMER._playing_file.pop(chat_id, None)
+        old = ctx.STREAMER._playing_file.pop(chat_id, None)
     except Exception:
         pass
     dl.delete_file(old)
     nxt = manager.next_track(chat_id, force=True)
     if nxt is None:
         manager.set_current(chat_id, None)
-        await STREAMER.stop(chat_id)
+        await ctx.STREAMER.stop(chat_id)
         return
     manager.set_current(chat_id, nxt)
-    await STREAMER._safe_play(chat_id, nxt)
+    await ctx.STREAMER._safe_play(chat_id, nxt)
 
 
 async def _show_queue(cb_or_msg, page: int = 1):
@@ -324,7 +324,7 @@ async def _show_queue(cb_or_msg, page: int = 1):
         if total == 0:
             lines.append("_(no upcoming tracks)_")
         pages = max(1, (total + 4) // 5)
-        admin = await guard.is_admin(DB, cb_or_msg.from_user.id)
+        admin = await guard.is_admin(ctx.DB, cb_or_msg.from_user.id)
         txt = f"📜 **Queue** ({total} upcoming)\n\n" + "\n".join(lines)
         markup = kb.queue_kb(page, pages, admin)
     if isinstance(cb_or_msg, CallbackQuery):
@@ -346,7 +346,7 @@ async def _is_controller(obj) -> bool:
     user = obj.from_user
     if not user:
         return False
-    if await guard.is_admin(DB, user.id):
+    if await guard.is_admin(ctx.DB, user.id):
         return True
     try:
         await obj.answer("👑 Admins only can control the player!", show_alert=True)
