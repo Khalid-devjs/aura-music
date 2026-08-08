@@ -48,7 +48,7 @@ def register(app: Client) -> None:
             return
         if action == "sys":
             await cb.answer()
-            await safe_edit(cb.message, _system_info(), kb.owner_menu())
+            await safe_edit(cb.message, await _system_info(), kb.owner_menu())
             return
         if action == "ban":
             ctx.pending.set(user.id, "owner_ban_user", chat_id=0)
@@ -195,14 +195,14 @@ async def _active_vcs(cb: CallbackQuery):
     await safe_edit(cb.message, "\n".join(lines), kb.owner_menu())
 
 
-def _system_info() -> str:
+async def _system_info() -> str:
     uptime = int(time.time() - ctx.START_TIME)
     h, rem = divmod(uptime, 3600)
     m, s = divmod(rem, 60)
     cpu = psutil.cpu_percent(interval=None)
     mem = psutil.virtual_memory()
     disk = psutil.disk_usage(".")
-    active = len(ctx.STREAMER.active_calls()) if ctx.STREAMER else 0
+    active = len(await ctx.STREAMER.active_calls()) if ctx.STREAMER else 0
     return (
         "🖥️ **System Information**\n\n"
         f"⏱ **Bot uptime:** {h}h {m}m {s}s\n"
