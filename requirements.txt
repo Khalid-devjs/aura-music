@@ -1,0 +1,9 @@
+pyrogram>=2.0.106
+py-tgcalls>=2.3.3
+yt-dlp>=2024.8.6
+aiosqlite>=0.20.0
+python-dotenv>=1.0.1
+pycryptodome>=3.20.0
+tgcrypto>=1.2.5
+uvloop>=0.19.0
+psutil>=5.9.8

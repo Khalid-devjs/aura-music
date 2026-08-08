@@ -1,0 +1,180 @@
+"""
+All inline keyboards for Aura Music Bot.
+
+Callback data convention:  <namespace>:<action>[:payload]
+Namespaces: main, pl (player), vol, q (queue), adm (admin),
+            grp (groups), ow (owner), set (settings), cf (confirm)
+"""
+from pyrogram.types import InlineKeyboardButton, InlineKeyboardMarkup
+
+
+def _row(*buttons: InlineKeyboardButton) -> list:
+    return list(buttons)
+
+
+def _btn(text: str, data: str) -> InlineKeyboardButton:
+    return InlineKeyboardButton(text, callback_data=data)
+
+
+# --------------------------------------------------------------------------
+# Main menu
+# --------------------------------------------------------------------------
+def main_menu(is_admin: bool = False) -> InlineKeyboardMarkup:
+    kb = [
+        _row(_btn("🎵 Play Music", "main:music"), _btn("🎬 Play Video", "main:video")),
+        _row(_btn("📜 Help", "main:help"), _btn("⚙️ Settings", "main:settings")),
+        _row(_btn("📊 Bot Stats", "main:stats"), _btn("👨‍💻 Developer", "main:dev")),
+    ]
+    if is_admin:
+        kb.append(_row(_btn("👑 Admin Panel", "main:admin")))
+    kb.append(_row(_btn("❌ Close", "main:close")))
+    return InlineKeyboardMarkup(kb)
+
+
+def close_only() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([_row(_btn("❌ Close", "main:close"))])
+
+
+def back_to_main() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        [_row(_btn("⬅️ Back", "main:back"), _btn("❌ Close", "main:close"))]
+    )
+
+
+# --------------------------------------------------------------------------
+# Player controls
+# --------------------------------------------------------------------------
+def player_kb(state: dict) -> InlineKeyboardMarkup:
+    """state: {'paused': bool, 'loop': bool, 'volume': int, 'has_queue': bool}"""
+    pause_btn = _btn("▶️ Resume", "pl:resume") if state.get("paused") else _btn("⏸️ Pause", "pl:pause")
+    loop_txt = "🔁 Loop: ON" if state.get("loop") else "🔁 Loop"
+    kb = [
+        _row(pause_btn, _btn("⏭️ Skip", "pl:skip")),
+        _row(_btn("⏹️ Stop", "pl:stop"), _btn("🔊 Volume", "pl:vol")),
+        _row(_btn("📜 Queue", "pl:queue"), _btn(loop_txt, "pl:loop")),
+    ]
+    if state.get("has_queue"):
+        kb.append(_row(_btn("⏯️ Next ▶️", "pl:next")))
+    kb.append(_row(_btn("❌ Close Player", "pl:close")))
+    return InlineKeyboardMarkup(kb)
+
+
+def volume_kb(volume: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        [
+            _row(_btn("🔉 -10", "vol:-10"), _btn(f"🔊 {volume}", "vol:nop"), _btn("🔊 +10", "vol:+10")),
+            _row(_btn("🔇 Mute", "vol:mute"), _btn("🔈 Unmute", "vol:unmute")),
+            _row(_btn("⬅️ Back", "vol:back")),
+        ]
+    )
+
+
+# --------------------------------------------------------------------------
+# Queue menu (pagination)
+# --------------------------------------------------------------------------
+def queue_kb(page: int, total_pages: int, is_admin: bool = False) -> InlineKeyboardMarkup:
+    kb = []
+    nav = []
+    if page > 1:
+        nav.append(_btn("⬅️ Prev", f"q:pg:{page - 1}"))
+    nav.append(_btn(f"{page}/{total_pages}", "q:nop"))
+    if page < total_pages:
+        nav.append(_btn("Next ➡️", f"q:pg:{page + 1}"))
+    kb.append(_row(*nav))
+    if is_admin:
+        kb.append(_row(_btn("🗑️ Clear Queue", "q:clear")))
+    kb.append(_row(_btn("❌ Close", "q:close")))
+    return InlineKeyboardMarkup(kb)
+
+
+# --------------------------------------------------------------------------
+# Admin panel
+# --------------------------------------------------------------------------
+def admin_menu() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        [
+            _row(_btn("➕ Add Admin", "adm:add"), _btn("➖ Remove Admin", "adm:rm")),
+            _row(_btn("👥 Admin List", "adm:list"), _btn("🚫 Ban User", "adm:ban")),
+            _row(_btn("✅ Unban User", "adm:unban"), _btn("📢 Broadcast", "adm:bcast")),
+            _row(_btn("📈 Statistics", "adm:stats"), _btn("👑 Owner Panel", "adm:owner")),
+            _row(_btn("👥 Group Management", "adm:groups")),
+            _row(_btn("🔄 Restart Bot", "adm:restart"), _btn("🛑 Shutdown Bot", "adm:shutdown")),
+            _row(_btn("⬅️ Back", "main:back")),
+        ]
+    )
+
+
+def confirm_kb(action: str, target: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        [
+            _row(
+                _btn("✅ Yes", f"cf:yes:{action}:{target}"),
+                _btn("❌ No", f"cf:no:{action}:{target}"),
+            )
+        ]
+    )
+
+
+def broadcast_kb() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        [
+            _row(
+                _btn("👥 Users", "bcast:users"),
+                _btn("👥 Groups", "bcast:groups"),
+                _btn("🌐 All", "bcast:all"),
+            ),
+            _row(_btn("⬅️ Back", "adm:back")),
+        ]
+    )
+
+
+# --------------------------------------------------------------------------
+# Group management
+# --------------------------------------------------------------------------
+def group_menu() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        [
+            _row(_btn("🚪 Leave Group", "grp:leave"), _btn("🚫 Blacklist Group", "grp:bl")),
+            _row(_btn("✅ Whitelist Group", "grp:wl"), _btn("📋 Group List", "grp:list")),
+            _row(_btn("⚙️ Group Settings", "grp:set")),
+            _row(_btn("⬅️ Back", "adm:back")),
+        ]
+    )
+
+
+def group_setting_kb(chat_id: int, streaming: bool) -> InlineKeyboardMarkup:
+    state = "🟢 Enabled" if streaming else "🔴 Disabled"
+    return InlineKeyboardMarkup(
+        [
+            _row(_btn(f"🎧 Streaming: {state}", f"grp:set:{chat_id}:toggle")),
+            _row(_btn("⬅️ Back", "grp:back")),
+        ]
+    )
+
+
+# --------------------------------------------------------------------------
+# Owner panel
+# --------------------------------------------------------------------------
+def owner_menu() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        [
+            _row(_btn("👥 All Users", "ow:users"), _btn("👥 All Groups", "ow:groups")),
+            _row(_btn("🎧 Active VCs", "ow:active"), _btn("📈 System Info", "ow:sys")),
+            _row(_btn("🚫 Ban User", "ow:ban"), _btn("✅ Unban User", "ow:unban")),
+            _row(_btn("🚫 Ban Group", "ow:ban_group"), _btn("✅ Unban Group", "ow:unban_group")),
+            _row(_btn("👥 Admins", "ow:admins"), _btn("📜 Logs", "ow:logs")),
+            _row(_btn("🔄 Update Bot", "ow:update"), _btn("🛑 Shutdown", "ow:shutdown")),
+            _row(_btn("⬅️ Back", "adm:back")),
+        ]
+    )
+
+
+# --------------------------------------------------------------------------
+# Settings
+# --------------------------------------------------------------------------
+def settings_menu(autodel: bool, prefix: str = "") -> InlineKeyboardMarkup:
+    kb = [
+        _row(_btn(f"🗑️ Auto-delete: {'ON' if autodel else 'OFF'}", "set:autodel")),
+        _row(_btn("⬅️ Back", "main:back")),
+    ]
+    return InlineKeyboardMarkup(kb)
