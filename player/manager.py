@@ -71,6 +71,14 @@ class PlayerManager:
             st.queue.clear()
             return n
 
+    def remove_at(self, chat_id: int, index: int) -> object:
+        """Remove queue item at 1-based `index`. Returns the removed Track or None."""
+        st = self.get(chat_id)
+        with self._lock:
+            if 1 <= index <= len(st.queue):
+                return st.queue.pop(index - 1)
+            return None
+
     def set_current(self, chat_id: int, track: Optional[Track]) -> None:
         st = self.get(chat_id)
         with self._lock:

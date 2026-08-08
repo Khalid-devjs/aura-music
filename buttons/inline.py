@@ -50,7 +50,7 @@ def player_kb(state: dict) -> InlineKeyboardMarkup:
     loop_txt = "🔁 Loop: ON" if state.get("loop") else "🔁 Loop"
     kb = [
         _row(pause_btn, _btn("⏭️ Skip", "pl:skip")),
-        _row(_btn("⏹️ Stop", "pl:stop"), _btn("🔊 Volume", "pl:vol")),
+        _row(_btn("⏹️ Stop", "pl:stop"), _btn("🔊 Volume", "pl:vol"), _btn("📴 Leave VC", "pl:leave")),
         _row(_btn("📜 Queue", "pl:queue"), _btn(loop_txt, "pl:loop")),
         _row(_btn("💾 Saved", "main:saved")),
     ]
@@ -73,8 +73,17 @@ def volume_kb(volume: int) -> InlineKeyboardMarkup:
 # --------------------------------------------------------------------------
 # Queue menu (pagination)
 # --------------------------------------------------------------------------
-def queue_kb(page: int, total_pages: int, is_admin: bool = False) -> InlineKeyboardMarkup:
+def queue_kb(
+    page: int,
+    total_pages: int,
+    is_admin: bool = False,
+    items: list = None,
+) -> InlineKeyboardMarkup:
+    """items: [(queue_index, title)] for the current page — renders a ❌ remove button per track (admins only)."""
     kb = []
+    if is_admin and items:
+        for idx, title in items:
+            kb.append(_row(_btn(f"❌ #{idx} {_short(title, 30)}", f"q:rm:{idx}")))
     nav = []
     if page > 1:
         nav.append(_btn("⬅️ Prev", f"q:pg:{page - 1}"))

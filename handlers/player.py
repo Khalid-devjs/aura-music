@@ -60,6 +60,11 @@ def register(app: Client) -> None:
             await message.reply("🚫 Streaming is **disabled** in this group.")
             return
 
+        # boss bot auto-adds the streamer userbot if it's missing from the group
+        if is_group(str(message.chat.type)) and not await _ensure_streamer_in_chat(target_chat):
+            await message.reply("⚠️ I couldn't add the **streamer** to this group.\n\nMake the **boss bot** an admin first (Admin rights → Add members), then try again.")
+            return
+
         try:
             status = await message.reply(PROCESSING)
         except Exception:
@@ -100,6 +105,10 @@ def register(app: Client) -> None:
                 "🎵 Usage: `/play <song name or link>`\n🎬 Video: `/vplay <song or link>`\n💾 Or pick from the **Saved library**:",
                 reply_markup=kb.saved_hint_kb(),
             )
+            return
+        # boss bot auto-adds the streamer userbot if it's missing from the group
+        if not await _ensure_streamer_in_chat(message.chat.id):
+            await message.reply("⚠️ I couldn't add the **streamer** to this group.\n\nMake the **boss bot** an admin first (Admin rights → Add members), then try again.")
             return
         status = await message.reply(PROCESSING)
         try:
@@ -150,7 +159,73 @@ def register(app: Client) -> None:
 
     @app.on_message(filters.command(["queue", "q"], prefixes=["/", "!"]))
     async def queue_cmd(client: Client, message: Message):
-        await _show_queue(app, message, page=1)
+        await _show_queue(message, page=1)
+
+    @app.on_message(filters.command(["remove", "rm"], prefixes=["/", "!"]))
+    async def remove_cmd(client: Client, message: Message):
+        """👑 Remove a queued track by its queue number (see /queue)."""
+        if not await _is_controller(message):
+            return
+        parts = message.text.split()
+        if len(parts) < 2:
+            await message.reply("🎯 Usage: `/remove <queue number>` — see `/queue` for numbers.")
+            return
+        try:
+            idx = int(parts[1])
+        except ValueError:
+            await message.reply("🎯 Please send a valid queue number, e.g. `/remove 3`.")
+            return
+        removed = manager.remove_at(message.chat.id, idx)
+        if removed:
+            await message.reply(f"❌ Removed **#{idx}** — {truncate(removed.title, 60)}")
+        else:
+            await message.reply(f"⚠️ No track at **#{idx}** in the queue.")
+
+    @app.on_message(filters.command(["leavevc", "stopvc", "leave"], prefixes=["/", "!"]))
+    async def leavevc_cmd(client: Client, message: Message):
+        """👑 Leave the voice chat entirely (ends the call)."""
+        if not await _is_controller(message):
+            return
+        await ctx.STREAMER.leave(message.chat.id)
+        await message.reply("📴 Left the voice chat. Call ended. Goodbye! 👋")
+
+    # ------------------------------------------------------------------
+    # Queue callbacks (pagination / clear / per-track remove)
+    # ------------------------------------------------------------------
+    @app.on_callback_query(filters.regex(r"^q:"))
+    @rate_limited
+    async def queue_cb(client: Client, cb: CallbackQuery):
+        user = cb.from_user
+        if not user or not await guard.can_use_bot(ctx.DB, user.id):
+            await cb.answer("🚫 Banned.", show_alert=True)
+            return
+        action = cb.data.split(":", 1)[1]
+        if action == "nop":
+            await cb.answer()
+            return
+        if action == "close":
+            try:
+                await cb.message.delete()
+            except Exception:
+                pass
+            await cb.answer()
+            return
+        if not await _is_controller(cb):
+            return
+        if action == "pg":
+            await _show_queue(cb, page=int(cb.data.split(":")[2]))
+        elif action == "clear":
+            n = manager.clear_queue(cb.message.chat.id)
+            await cb.answer(f"🗑️ Removed {n} track(s) from the queue.")
+            await _show_queue(cb, page=1)
+        elif action == "rm":
+            idx = int(cb.data.split(":")[2])
+            removed = manager.remove_at(cb.message.chat.id, idx)
+            if removed:
+                await cb.answer(f"❌ Removed #{idx} — {truncate(removed.title, 40)}")
+            else:
+                await cb.answer("⚠️ Track not found in the queue.")
+            await _show_queue(cb, page=1)
 
     # ------------------------------------------------------------------
     # Player control callbacks
@@ -201,6 +276,11 @@ def register(app: Client) -> None:
                 await _refresh_player(cb.message)
             elif action == "queue":
                 await _show_queue(cb, page=1)
+            elif action == "leave":
+                await ctx.STREAMER.leave(chat_id)
+                await safe_edit(
+                    cb.message, "📴 **Left the voice chat.** Call ended. Goodbye! 👋", kb.close_only()
+                )
             elif action == "close":
                 try:
                     await cb.message.delete()
@@ -272,6 +352,10 @@ def register(app: Client) -> None:
 
         if not is_group(str(cb.message.chat.type)):
             await cb.answer("🔊 Open a **group voice chat**, then use 💾 Saved there!", show_alert=True)
+            return
+
+        if not await _ensure_streamer_in_chat(cb.message.chat.id):
+            await cb.answer("⚠️ Couldn't add the streamer to this group. Make the boss bot admin!", show_alert=True)
             return
 
         track_id = int(parts[2])
@@ -386,9 +470,12 @@ async def _show_queue(cb_or_msg, page: int = 1):
         if total == 0:
             lines.append("_(no upcoming tracks)_")
         pages = max(1, (total + 4) // 5)
-        admin = await guard.is_admin(ctx.DB, cb_or_msg.from_user.id)
+        admin = await _is_controller(cb_or_msg, alert=False)
+        btn_items = [(i, t.title) for i, t in enumerate(items, start=(page - 1) * 5 + 1)]
         txt = f"📜 **Queue** ({total} upcoming)\n\n" + "\n".join(lines)
-        markup = kb.queue_kb(page, pages, admin)
+        if admin and items:
+            txt += "\n\n_👑 Tap ❌ to remove a track._"
+        markup = kb.queue_kb(page, pages, admin, btn_items)
     if isinstance(cb_or_msg, CallbackQuery):
         await safe_edit(cb_or_msg.message, txt, markup)
     else:
@@ -403,17 +490,73 @@ async def _auto_delete(message: Message, delay_ms: int):
         pass
 
 
-async def _is_controller(obj) -> bool:
-    """Player controls are admin/owner-only."""
+_streamer_ok_chats: set = set()
+
+
+async def _ensure_streamer_in_chat(chat_id: int) -> bool:
+    """Make sure the streaming userbot is a member of the group.
+
+    If it is missing, the BOSS bot auto-adds it and promotes it
+    (manage voice chats) so streaming just works. Returns True on success.
+    """
+    if chat_id in _streamer_ok_chats:
+        return True
+    try:
+        await ctx.USER_APP.get_chat_member(chat_id, "me")
+        _streamer_ok_chats.add(chat_id)
+        return True
+    except Exception:
+        pass  # userbot not a member (or chat is a private DM — ignore)
+    # Only auto-add inside groups/supergroups
+    try:
+        chat = await ctx.BOT_APP.get_chat(chat_id)
+        if str(chat.type).split(".")[-1].lower() not in ("group", "supergroup"):
+            _streamer_ok_chats.add(chat_id)
+            return True
+    except Exception:
+        return False
+    try:
+        await ctx.BOT_APP.add_chat_members(chat_id, ctx.USER_APP.me.id)
+        await asyncio.sleep(1.5)
+        await ctx.BOT_APP.promote_chat_member(
+            chat_id,
+            ctx.USER_APP.me.id,
+            can_manage_voice_chats=True,
+            can_manage_video_chats=True,
+            can_invite_users=True,
+        )
+        _streamer_ok_chats.add(chat_id)
+        return True
+    except Exception as e:
+        logger.warning("auto-add streamer failed in %s: %s", chat_id, e)
+        return False
+
+
+async def _is_controller(obj, alert: bool = True) -> bool:
+    """Player controls = bot owner + bot admins + GROUP admins only.
+
+    `alert=False` makes it silent (used when deciding whether to SHOW admin buttons).
+    """
     user = obj.from_user
     if not user:
         return False
     if await guard.is_admin(ctx.DB, user.id):
         return True
-    try:
-        await obj.answer("👑 Admins only can control the player!", show_alert=True)
-    except Exception:
-        pass
+    # group admin check (supergroup/group)
+    chat = getattr(obj, "chat", None) or getattr(getattr(obj, "message", None), "chat", None)
+    if chat and getattr(chat, "type", None):
+        if str(chat.type).split(".")[-1].lower() in ("group", "supergroup"):
+            try:
+                member = await chat.get_member(user.id)
+                if str(member.status).split(".")[-1].lower() in ("administrator", "creator"):
+                    return True
+            except Exception:
+                pass
+    if alert:
+        try:
+            await obj.answer("👑 Group admins only can control the player!", show_alert=True)
+        except Exception:
+            pass
     return False
 
 
