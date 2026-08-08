@@ -225,15 +225,60 @@ def register(app: Client) -> None:
         else:
             await message.reply(f"⚠️ No track at **#{idx}** in the queue.")
 
-    @app.on_message(filters.command(["leavevc", "stopvc", "leave"], prefixes=["/", "!"]))
+    @app.on_message(filters.command(["leavevc", "stopvc"], prefixes=["/", "!"]))
     async def leavevc_cmd(client: Client, message: Message):
-        """👑 Leave the voice chat entirely (ends the call)."""
+        """👑 Leave the voice chat entirely (ends the call), stay in the group."""
         if not await _group_only(message):
             return
         if not await _is_controller(message):
             return
         await ctx.STREAMER.leave(message.chat.id)
         await message.reply("📴 Left the voice chat. Call ended. Goodbye! 👋")
+
+    @app.on_message(filters.command(["leave", "leavegroup"], prefixes=["/", "!"]))
+    async def leavegroup_cmd(client: Client, message: Message):
+        """👑 Leave the group entirely: end call, streamer leaves, bot leaves."""
+        if not await _group_only(message):
+            return
+        if not await _is_controller(message):
+            return
+        chat_id = message.chat.id
+        try:
+            await ctx.STREAMER.leave(chat_id)  # end the call
+        except Exception:
+            pass
+        try:
+            await ctx.USER_APP.leave_chat(chat_id)  # streamer leaves the group
+        except Exception:
+            pass
+        try:
+            await message.reply("🚪 Leaving the group. Bye! 👋")
+        except Exception:
+            pass
+        try:
+            await client.leave_chat(chat_id)  # bot leaves the group
+        except Exception as e:
+            logger.warning("leave_chat %s failed: %s", chat_id, e)
+
+    @app.on_message(filters.command(["whitelist", "wl"], prefixes=["/", "!"]))
+    async def whitelist_cmd(client: Client, message: Message):
+        """✅ Whitelist the current group (or /whitelist <id>) so the bot stays."""
+        if not await _is_controller(message):
+            return
+        parts = message.text.strip().split()
+        if len(parts) > 1:
+            try:
+                chat_id = int(parts[1])
+            except ValueError:
+                await message.reply("❌ Send a valid group **chat ID**.")
+                return
+        elif is_group(str(message.chat.type)):
+            chat_id = message.chat.id
+        else:
+            await message.reply("❌ Run this in the group, or send `/whitelist <group id>`.")
+            return
+        await ctx.DB.whitelist_group(chat_id)
+        await message.reply(f"✅ Group `{chat_id}` **whitelisted** — I'll stay now! 🎧")
 
     # ------------------------------------------------------------------
     # Queue callbacks (pagination / clear / per-track remove)
@@ -563,7 +608,15 @@ async def _ensure_streamer_in_chat(chat_id: int) -> bool:
         if status in ("member", "administrator", "creator"):
             is_member = True
     except Exception:
-        pass  # userbot not a member (or chat is a private DM — ignore)
+        # cold peer cache (fresh process) — prime the chat, then re-check
+        try:
+            await ctx.USER_APP.get_chat(chat_id)
+            member = await ctx.USER_APP.get_chat_member(chat_id, "me")
+            status = str(member.status).split(".")[-1].lower()
+            if status in ("member", "administrator", "creator"):
+                is_member = True
+        except Exception:
+            pass  # userbot not a member (or peer unreachable)
     # Only auto-add inside groups/supergroups
     try:
         chat = await ctx.BOT_APP.get_chat(chat_id)
@@ -584,16 +637,20 @@ async def _ensure_streamer_in_chat(chat_id: int) -> bool:
                     link = await ctx.BOT_APP.create_chat_invite_link(chat_id, member_limit=1)
                     try:
                         await ctx.USER_APP.join_chat(link.invite_link)
-                    except Exception:
-                        # INVITE_HASH_EXPIRED on a fresh link usually means the
-                        # streamer is banned — unban via the bot admin, then rejoin
-                        logger.warning("streamer join failed — trying unban + rejoin in %s", chat_id)
-                        try:
-                            await ctx.BOT_APP.unban_chat_member(chat_id, ctx.USER_APP.me.id)
-                            await asyncio.sleep(0.5)
-                            await ctx.USER_APP.join_chat(link.invite_link)
-                        except Exception:
-                            raise
+                    except Exception as join_e:
+                        if "USER_ALREADY_PARTICIPANT" in str(join_e):
+                            # already a member — that's success, keep going
+                            logger.info("streamer already a member in %s — continuing", chat_id)
+                        else:
+                            # INVITE_HASH_EXPIRED on a fresh link usually means the
+                            # streamer is banned — unban via the bot admin, then rejoin
+                            logger.warning("streamer join failed — trying unban + rejoin in %s", chat_id)
+                            try:
+                                await ctx.BOT_APP.unban_chat_member(chat_id, ctx.USER_APP.me.id)
+                                await asyncio.sleep(0.5)
+                                await ctx.USER_APP.join_chat(link.invite_link)
+                            except Exception:
+                                raise
                 except Exception as e2:
                     logger.warning("invite-link join failed in %s: %s", chat_id, e2)
                     raise
