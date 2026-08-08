@@ -90,6 +90,11 @@ class Streamer:
             if nxt is None:
                 manager.set_current(chat_id, None)
                 logger.info("Queue finished in chat %s", chat_id)
+                # last track done → end the voice chat too
+                try:
+                    await self.pytgcalls.leave_call(chat_id, close=True)
+                except Exception:
+                    pass  # call may already be closed — fine
                 await self._notify_finished(chat_id)
                 return
             manager.set_current(chat_id, nxt)
