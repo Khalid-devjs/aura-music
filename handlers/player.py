@@ -3,7 +3,7 @@ import asyncio
 import logging
 
 from pyrogram import Client, filters
-from pyrogram.types import CallbackQuery, Message
+from pyrogram.types import CallbackQuery, ChatPrivileges, Message
 
 import config
 from buttons import inline as kb
@@ -426,9 +426,16 @@ async def _enqueue(chat_id: int, track: Track, app, status: Message, message: Me
     """Add track to queue; start playback if idle. Returns position."""
     st = manager.get(chat_id)
     if st.playing:
-        pos = manager.add_track(chat_id, track)
-        await _notify_queued(status, track, pos)
-        return pos
+        # stale-state guard: if we THINK we're playing but no voice chat is
+        # actually live (call ended silently / update missed), reset the state
+        # and start fresh instead of queueing behind a dead player
+        if not await ctx.STREAMER._call_active(chat_id):
+            logger.warning("stale playing state in %s — resetting, starting fresh", chat_id)
+            manager.stop(chat_id)
+        else:
+            pos = manager.add_track(chat_id, track)
+            await _notify_queued(status, track, pos)
+            return pos
 
     # start playback
     started = await ctx.STREAMER.play_track(chat_id, track)
@@ -609,9 +616,10 @@ async def _ensure_streamer_in_chat(chat_id: int) -> bool:
         await ctx.BOT_APP.promote_chat_member(
             chat_id,
             ctx.USER_APP.me.id,
-            can_manage_voice_chats=True,
-            can_manage_video_chats=True,
-            can_invite_users=True,
+            privileges=ChatPrivileges(
+                can_manage_video_chats=True,  # covers voice + video calls
+                can_invite_users=True,
+            ),
         )
         await asyncio.sleep(0.3)
         try:
