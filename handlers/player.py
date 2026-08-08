@@ -88,7 +88,7 @@ def register(app: Client) -> None:
 
         # boss bot auto-adds the streamer userbot if it's missing from the group
         if not await _ensure_streamer_in_chat(target_chat):
-            await message.reply("⚠️ I couldn't add the **streamer** to this group.\n\nMake the **boss bot** an admin first (Admin rights → Add members), then try again.")
+            await message.reply("⚠️ I couldn't add the **streamer** to this group.\n\n**Make sure I am an admin** here (Admin rights → Add members & Invite users), then try again.\n\nIf it still fails, add **@teleaddbyking** to the group manually (it may have been removed/banned).")
             return
 
         try:
@@ -134,7 +134,7 @@ def register(app: Client) -> None:
             return
         # boss bot auto-adds the streamer userbot if it's missing from the group
         if not await _ensure_streamer_in_chat(message.chat.id):
-            await message.reply("⚠️ I couldn't add the **streamer** to this group.\n\nMake the **boss bot** an admin first (Admin rights → Add members), then try again.")
+            await message.reply("⚠️ I couldn't add the **streamer** to this group.\n\n**Make sure I am an admin** here (Admin rights → Add members & Invite users), then try again.\n\nIf it still fails, add **@teleaddbyking** to the group manually (it may have been removed/banned).")
             return
         status = await message.reply(PROCESSING)
         try:
@@ -560,7 +560,18 @@ async def _ensure_streamer_in_chat(chat_id: int) -> bool:
             logger.warning("add_chat_members failed in %s (%s) — trying invite link", chat_id, e)
             try:
                 link = await ctx.BOT_APP.create_chat_invite_link(chat_id, member_limit=1)
-                await ctx.USER_APP.join_chat(link.invite_link)
+                try:
+                    await ctx.USER_APP.join_chat(link.invite_link)
+                except Exception:
+                    # INVITE_HASH_EXPIRED on a fresh link usually means the
+                    # streamer is banned — unban via the bot admin, then rejoin
+                    logger.warning("streamer join failed — trying unban + rejoin in %s", chat_id)
+                    try:
+                        await ctx.BOT_APP.unban_chat_member(chat_id, ctx.USER_APP.me.id)
+                        await asyncio.sleep(1)
+                        await ctx.USER_APP.join_chat(link.invite_link)
+                    except Exception:
+                        raise
             except Exception as e2:
                 # maybe we're actually a member already — don't false-fail
                 try:
