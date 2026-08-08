@@ -669,35 +669,45 @@ async def _ensure_streamer_in_chat(chat_id: int) -> bool:
         except Exception as e:
             logger.warning("auto-add streamer failed in %s: %s", chat_id, e)
             return False
-    # ALWAYS ensure admin — needed to create/start the group call
+    # Ensure admin — needed to create/start the group call.
+    # If the streamer is ALREADY an admin, promotion is unnecessary (and the
+    # bot may even lack the right to promote) — only promote plain members.
     try:
-        await ctx.BOT_APP.promote_chat_member(
-            chat_id,
-            ctx.USER_APP.me.id,
-            privileges=ChatPrivileges(
-                can_manage_video_chats=True,  # covers voice + video calls
-                can_invite_users=True,
-            ),
-        )
-        await asyncio.sleep(0.3)
+        cur = await ctx.BOT_APP.get_chat_member(chat_id, ctx.USER_APP.me.id)
+        cur_status = str(cur.status).split(".")[-1].lower()
+    except Exception:
+        cur_status = ""
+    if cur_status in ("administrator", "creator"):
+        logger.info("streamer already admin in %s — no promote needed", chat_id)
+    else:
         try:
-            member = await ctx.BOT_APP.get_chat_member(chat_id, ctx.USER_APP.me.id)
-            if str(member.status).split(".")[-1].lower() != "administrator":
-                logger.warning("streamer NOT admin after promote in %s — bot may lack 'manage voice chats' right", chat_id)
-        except Exception:
-            pass
-    except Exception as e:
-        logger.warning("promote failed in %s: %s", chat_id, e)
-        if chat_id not in _promote_warned:
-            _promote_warned.add(chat_id)
+            await ctx.BOT_APP.promote_chat_member(
+                chat_id,
+                ctx.USER_APP.me.id,
+                privileges=ChatPrivileges(
+                    can_manage_video_chats=True,  # covers voice + video calls
+                    can_invite_users=True,
+                ),
+            )
+            await asyncio.sleep(0.3)
             try:
-                await ctx.BOT_APP.send_message(
-                    chat_id,
-                    "⚠️ I can't promote the streamer to admin here — make **me an admin** "
-                    "in this group for full auto features (auto-start + auto-end of the call).",
-                )
+                member = await ctx.BOT_APP.get_chat_member(chat_id, ctx.USER_APP.me.id)
+                if str(member.status).split(".")[-1].lower() != "administrator":
+                    logger.warning("streamer NOT admin after promote in %s — bot may lack 'manage voice chats' right", chat_id)
             except Exception:
                 pass
+        except Exception as e:
+            logger.warning("promote failed in %s: %s", chat_id, e)
+            if chat_id not in _promote_warned:
+                _promote_warned.add(chat_id)
+                try:
+                    await ctx.BOT_APP.send_message(
+                        chat_id,
+                        "⚠️ I can't promote the streamer to admin here — make **me an admin** "
+                        "in this group for full auto features (auto-start + auto-end of the call).",
+                    )
+                except Exception:
+                    pass
     _streamer_ok_chats.add(chat_id)
     return True
 
