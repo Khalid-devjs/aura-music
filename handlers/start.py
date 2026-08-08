@@ -54,8 +54,18 @@ DEV = (
     "🗄️ **Database:** SQLite (async)\n"
     "🎛️ **UI:** Full button interface\n\n"
     "📢 **Support:** {support}\n"
-    "🔗 **Version:** 1.0.0"
+    "🔗 **Version:** {version}"
 )
+
+LOGO = "assets/logo.jpg"
+
+
+async def _with_logo(reply_fn, caption: str, markup):
+    """Send the bot logo as a photo with the given caption (falls back to plain text)."""
+    try:
+        return await reply_fn(LOGO, caption=caption, reply_markup=markup)
+    except Exception:
+        return await reply_fn(caption, reply_markup=markup)
 
 
 def register(app: Client) -> None:
@@ -66,11 +76,11 @@ def register(app: Client) -> None:
             await ctx.DB.add_user(user.id, user.username or "", user.first_name or "")
         admin = bool(user and await guard.is_admin(ctx.DB, user.id))
         txt = WELCOME.format(name=config.BOT_NAME, support=config.SUPPORT_CHAT or "—")
-        await message.reply(txt, reply_markup=kb.main_menu(admin))
+        await _with_logo(message.reply_photo, txt, kb.main_menu(admin))
 
     @app.on_message(filters.command("help", prefixes=["/", "!"]))
     async def help_cmd(client: Client, message: Message):
-        await message.reply(HELP, reply_markup=kb.back_to_main())
+        await _with_logo(message.reply_photo, HELP, kb.back_to_main())
 
     @app.on_message(filters.command("stats", prefixes=["/", "!"]))
     async def stats_cmd(client: Client, message: Message):
@@ -125,7 +135,7 @@ def register(app: Client) -> None:
             await cb.answer()
             await safe_edit(
                 cb.message,
-                DEV.format(support=config.SUPPORT_CHAT or "—"),
+                DEV.format(support=config.SUPPORT_CHAT or "—", version=config.BOT_VERSION),
                 kb.back_to_main(),
             )
             return
@@ -176,4 +186,4 @@ async def _send_stats(message: Message):
     if isinstance(message, CallbackQuery):
         await safe_edit(message.message, txt, kb.back_to_main())
     else:
-        await message.reply(txt, reply_markup=kb.back_to_main())
+        await _with_logo(message.reply_photo, txt, kb.back_to_main())
