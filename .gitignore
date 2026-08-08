@@ -9,3 +9,4 @@ musicbot.db
 *.session
 *.session-journal
 cookies.txt
+downloads/

@@ -10,7 +10,7 @@ import logging
 
 from pyrogram import Client
 from pytgcalls import PyTgCalls
-from pytgcalls.types import GroupCallConfig, MediaStream, StreamEnded, Update
+from pytgcalls.types import ChatUpdate, GroupCallConfig, MediaStream, StreamEnded, Update
 from pytgcalls.types.stream import AudioQuality, VideoQuality
 
 import config
@@ -41,11 +41,37 @@ class Streamer:
             if isinstance(update, StreamEnded):
                 chat_id = update.chat_id
                 await self._on_track_end(chat_id)
+                return
+            if isinstance(update, ChatUpdate):
+                status = getattr(update, "status", None)
+                if status is not None:
+                    # admin ended the group call / streamer kicked → cancel everything
+                    if bool(status & ChatUpdate.Status.CLOSED_VOICE_CHAT) or bool(
+                        status & ChatUpdate.Status.KICKED
+                    ):
+                        await self._on_call_ended(update.chat_id)
+                return
         except Exception:
-            # also try raw update types (older/newer versions vary)
+            pass
+        # also try raw update types (older/newer versions vary)
+        try:
+            if update and hasattr(update, "chat_id") and str(update).lower().find("streamend") >= 0:
+                await self._on_track_end(update.chat_id)
+        except Exception:
+            pass
+
+    async def _on_call_ended(self, chat_id: int) -> None:
+        """Group call was ended (admin pressed end / streamer kicked) — cancel queue + state."""
+        st = manager.get(chat_id)
+        was_playing = st.playing or bool(st.queue) or st.current is not None
+        old = self._playing_file.pop(chat_id, None)
+        downloader.delete_file(old)
+        manager.stop(chat_id)
+        if was_playing:
             try:
-                if update and hasattr(update, "chat_id") and str(update).lower().find("streamend") >= 0:
-                    await self._on_track_end(update.chat_id)
+                await self.app.send_message(
+                    chat_id, "📴 **Group call ended** — playback stopped and queue cleared."
+                )
             except Exception:
                 pass
 
