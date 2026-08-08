@@ -161,51 +161,67 @@ class Streamer:
             await self._save_to_library(track)
         except Exception as e:
             logger.error("play failed in %s: %s", chat_id, e)
-            # re-join attempt (auto reconnect) — fresh call if the old one died
+            # Robust recovery: a dead/closed call needs time to propagate —
+            # retry a few times, recreating a fresh call each round.
+            for attempt in range(3):
+                try:
+                    # Drop py-tgcalls' internal group-call cache: after a call
+                    # dies externally it still holds the DEAD call ID, and
+                    # JoinGroupCall keeps failing GROUPCALL_INVALID on it even
+                    # after we create a fresh call.
+                    try:
+                        self.pytgcalls._app._cache.drop_cache(chat_id)
+                    except Exception:
+                        pass
+                    # leave quietly — GROUPCALL_FORBIDDEN (not a participant)
+                    # is fine: nothing to leave, don't abort the retry.
+                    try:
+                        await self.pytgcalls.leave_call(chat_id, close=False)
+                    except Exception as leave_e:
+                        logger.warning(
+                            "leave before retry %d in %s: %s",
+                            attempt + 1, chat_id, leave_e,
+                        )
+                    await asyncio.sleep(3)  # let the old call fully die
+                    if not await self._call_active(chat_id):
+                        await self._ensure_call(chat_id)
+                    await asyncio.sleep(3)  # propagation before joining
+                    await self.pytgcalls.play(
+                        chat_id,
+                        MediaStream(
+                            track.file_path,
+                            audio_parameters=AudioQuality.HIGH,
+                            video_parameters=VideoQuality.HD_720p
+                            if track.is_video else VideoQuality.SD_360p,
+                        ),
+                        GroupCallConfig(auto_start=True),
+                    )
+                    manager.set_paused(chat_id, False)
+                    self._playing_file[chat_id] = track.file_path
+                    logger.info(
+                        "Now playing (retry %d) in %s: %s",
+                        attempt + 1, chat_id, track.title,
+                    )
+                    return
+                except Exception as retry_e:
+                    logger.warning(
+                        "retry %d failed in %s: %s",
+                        attempt + 1, chat_id, retry_e,
+                    )
+                    await asyncio.sleep(2)
+            # all retries exhausted — clean up and notify
+            old = self._playing_file.pop(chat_id, None)
+            downloader.delete_file(old)
+            manager.stop(chat_id)
             try:
-                try:
-                    await self.pytgcalls.leave_call(chat_id, close=False)
-                except Exception as leave_e:
-                    # GROUPCALL_FORBIDDEN = streamer isn't a participant
-                    # (call already dead/never joined) — nothing to leave,
-                    # that's fine. Don't let this abort the retry.
-                    logger.warning("leave before retry in %s: %s", chat_id, leave_e)
-                await asyncio.sleep(1)
-                if not await self._call_active(chat_id):
-                    await self._ensure_call(chat_id)
-                await self.pytgcalls.play(
+                await self.app.send_message(
                     chat_id,
-                    MediaStream(
-                        track.file_path,
-                        audio_parameters=AudioQuality.HIGH,
-                        video_parameters=VideoQuality.HD_720p if track.is_video else VideoQuality.SD_360p,
-                    ),
-                    GroupCallConfig(auto_start=True),
+                    "❌ **Could not start playback.**\n\n"
+                    "Make sure the **bot** is an admin here, the voice chat is open, "
+                    f"and the streamer is a member.\n`{e}`",
                 )
-                manager.set_paused(chat_id, False)
-            except Exception as e2:
-                logger.error("rejoin failed in %s: %s", chat_id, e2)
-                old = self._playing_file.pop(chat_id, None)
-                downloader.delete_file(old)
-                manager.stop(chat_id)
-                try:
-                    if "CHAT_ADMIN_REQUIRED" in str(e2):
-                        await self.app.send_message(
-                            chat_id,
-                            "❌ **Could not start the voice chat** — the streamer isn't an admin here.\n\n"
-                            "Give the **bot full admin** rights in this group (especially **Manage voice chats**), "
-                            "or set **Who can start voice chats** to *All members* in group settings.\n"
-                            "If **@teleaddbyking** shows as banned, unban it (group settings → Members).",
-                        )
-                    else:
-                        await self.app.send_message(
-                            chat_id,
-                            "❌ **Could not start playback.**\n\n"
-                            "Make sure the **bot** is an admin here, the voice chat is open, "
-                            f"and the streamer is a member.\n`{e2}`",
-                        )
-                except Exception:
-                    pass
+            except Exception:
+                pass
 
     async def play_track(self, chat_id: int, track: Track) -> bool:
         """Play immediately (queue start) or queue if already playing.
