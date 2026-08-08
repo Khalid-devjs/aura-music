@@ -30,8 +30,11 @@ async def send_or_edit(message: Message, text: str, reply_markup=None) -> Messag
         return await message.reply(text, reply_markup=reply_markup)
 
 
-def is_group(chat_type: str) -> bool:
-    return chat_type in ("group", "supergroup")
+def is_group(chat_type) -> bool:
+    """True for group/supergroup chats. Accepts ChatType enum, str(ChatType) ('ChatType.SUPERGROUP'), or raw 'supergroup'."""
+    s = getattr(chat_type, "value", chat_type)
+    s = str(s).lower().split(".")[-1]
+    return s in ("group", "supergroup")
 
 
 def ensure_int(value) -> int:
