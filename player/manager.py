@@ -20,6 +20,7 @@ class Track:
     is_video: bool = False
     thumbnail: str = ""
     stream_url: str = ""
+    file_id: str = ""            # Telegram file_id (for later re-download / saved library)
 
 
 @dataclass

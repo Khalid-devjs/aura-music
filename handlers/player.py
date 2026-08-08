@@ -1,5 +1,6 @@
 """Music/video playback flow + player control buttons + queue."""
 import asyncio
+import logging
 
 from pyrogram import Client, filters
 from pyrogram.types import CallbackQuery, Message
@@ -13,6 +14,8 @@ from modules.ratelimit import rate_limited
 from player import downloader
 from player.manager import manager, Track
 from utils.formatters import format_duration, truncate
+
+logger = logging.getLogger("auramusic")
 
 PROCESSING = "⏳ **Processing your request…**"
 
@@ -159,45 +162,57 @@ def register(app: Client) -> None:
         action = cb.data.split(":", 1)[1]
         chat_id = cb.message.chat.id
 
-        if action == "pause":
-            await ctx.STREAMER.pause(chat_id)
-            await _refresh_player(cb.message)
-        elif action == "resume":
-            await ctx.STREAMER.resume(chat_id)
-            await _refresh_player(cb.message)
-        elif action == "skip":
-            await cb.answer("⏭️ Skipping…")
-            await _do_skip(chat_id)
-            await _refresh_player(cb.message)
-        elif action == "next":
-            await cb.answer("⏭️ Next…")
-            await _do_skip(chat_id)
-            await _refresh_player(cb.message)
-        elif action == "stop":
-            await ctx.STREAMER.stop(chat_id)
-            await safe_edit(
-                cb.message, "⏹️ **Playback stopped.** Queue cleared. See you next time! 🎧", kb.close_only()
-            )
-        elif action == "vol":
-            st = manager.get(chat_id)
-            await safe_edit(
-                cb.message,
-                f"🔊 **Volume Control**\n\nCurrent: **{st.volume}**",
-                kb.volume_kb(st.volume),
-            )
-        elif action == "loop":
-            st = manager.get(chat_id)
-            val = manager.set_loop(chat_id, not st.loop)
-            await cb.answer(f"🔁 Loop {'ON' if val else 'OFF'}")
-            await _refresh_player(cb.message)
-        elif action == "queue":
-            await _show_queue(cb, page=1)
-        elif action == "close":
-            try:
-                await cb.message.delete()
-            except Exception:
-                pass
-            await cb.answer("Player closed")
+        try:
+            if action == "pause":
+                await ctx.STREAMER.pause(chat_id)
+                await _refresh_player(cb.message)
+            elif action == "resume":
+                await ctx.STREAMER.resume(chat_id)
+                await _refresh_player(cb.message)
+            elif action == "skip":
+                await cb.answer("⏭️ Skipping…")
+                await _do_skip(chat_id)
+                await _refresh_player(cb.message)
+            elif action == "next":
+                await cb.answer("⏭️ Next…")
+                await _do_skip(chat_id)
+                await _refresh_player(cb.message)
+            elif action == "stop":
+                await ctx.STREAMER.stop(chat_id)
+                await safe_edit(
+                    cb.message, "⏹️ **Playback stopped.** Queue cleared. See you next time! 🎧", kb.close_only()
+                )
+            elif action == "vol":
+                st = manager.get(chat_id)
+                await safe_edit(
+                    cb.message,
+                    f"🔊 **Volume Control**\n\nCurrent: **{st.volume}**",
+                    kb.volume_kb(st.volume),
+                )
+            elif action == "loop":
+                st = manager.get(chat_id)
+                val = manager.set_loop(chat_id, not st.loop)
+                await cb.answer(f"🔁 Loop {'ON' if val else 'OFF'}")
+                await _refresh_player(cb.message)
+            elif action == "queue":
+                await _show_queue(cb, page=1)
+            elif action == "close":
+                try:
+                    await cb.message.delete()
+                except Exception:
+                    pass
+                await cb.answer("Player closed")
+        except Exception as e:
+            if "not in a call" in str(e).lower():
+                await safe_edit(
+                    cb.message, "🎧 **Nothing is playing right now.** Start something first!", kb.close_only()
+                )
+            else:
+                logger.warning("player_cb %s failed: %s", action, e)
+                try:
+                    await cb.answer(f"❌ {truncate(str(e), 80)}", show_alert=True)
+                except Exception:
+                    pass
 
     @app.on_callback_query(filters.regex(r"^vol:"))
     @rate_limited
@@ -227,6 +242,48 @@ def register(app: Client) -> None:
             await safe_edit(cb.message, f"🔊 **Volume Control**\n\nCurrent: **{vol}**", kb.volume_kb(vol))
         elif action == "back":
             await _refresh_player(cb.message)
+
+    # ------------------------------------------------------------------
+    # Saved library (💾) — every played track, replayable
+    # ------------------------------------------------------------------
+    @app.on_callback_query(filters.regex(r"^sv:"))
+    @rate_limited
+    async def saved_cb(client: Client, cb: CallbackQuery):
+        user = cb.from_user
+        if not user or not await guard.can_use_bot(ctx.DB, user.id):
+            await cb.answer("🚫 Banned.", show_alert=True)
+            return
+        parts = cb.data.split(":")
+        action = parts[1]
+
+        if action == "nop":
+            await cb.answer()
+            return
+        if action == "pg":
+            await show_saved(cb, page=int(parts[2]))
+            return
+        if action != "play":
+            return
+
+        if not is_group(str(cb.message.chat.type)):
+            await cb.answer("🔊 Open a **group voice chat**, then use 💾 Saved there!", show_alert=True)
+            return
+
+        track_id = int(parts[2])
+        row = await ctx.DB.get_saved_track(track_id)
+        if not row:
+            await cb.answer("Track not found.", show_alert=True)
+            return
+        await cb.answer("⏳ Loading…")
+        status = await cb.message.reply(PROCESSING)
+        chat_id = cb.message.chat.id
+        try:
+            track = await _resolve_saved(row)
+        except Exception as e:
+            await safe_edit(status, f"❌ **Could not load saved track.**\n\n`{truncate(str(e), 150)}`", kb.close_only())
+            return
+        await _enqueue(chat_id, track, client, status, cb.message)
+        await ctx.DB.bump_stat("video_plays" if track.is_video else "total_plays")
 
 
 # ----------------------------------------------------------------------
@@ -367,3 +424,58 @@ async def _admin_op(message: Message, op):
         await message.reply(f"{emoji} **{name.capitalize()}** done.")
     except Exception as e:
         await message.reply(f"❌ Failed: `{truncate(str(e), 100)}`")
+
+
+# ----------------------------------------------------------------------
+# Saved library (💾)
+# ----------------------------------------------------------------------
+SAVED_PER_PAGE = 6
+
+
+async def show_saved(cb_or_msg, page: int = 1):
+    """Render the saved-track library (paginated list of playable buttons)."""
+    total = await ctx.DB.count_saved_tracks()
+    if total == 0:
+        txt = "💾 **No saved tracks yet.**\n\nEvery music/video played will show up here, so anyone can replay it later."
+        markup = kb.back_to_main()
+    else:
+        pages = max(1, (total + SAVED_PER_PAGE - 1) // SAVED_PER_PAGE)
+        page = max(1, min(page, pages))
+        items = await ctx.DB.saved_tracks_page(limit=SAVED_PER_PAGE, offset=(page - 1) * SAVED_PER_PAGE)
+        lines = []
+        for i, r in enumerate(items, start=(page - 1) * SAVED_PER_PAGE + 1):
+            dur = format_duration(r["duration"]) if r["duration"] else "?"
+            icon = "🎬" if r["is_video"] else "🎵"
+            lines.append(f"`{i}.` {icon} {truncate(r['title'], 42)} — {dur} · ▶️ {r['plays']}x")
+        txt = (
+            f"💾 **Saved Library** ({total})\n\n"
+            + "\n".join(lines)
+            + "\n\n_Tap a track to play it in this group._"
+        )
+        markup = kb.saved_kb(items, page, pages)
+    if isinstance(cb_or_msg, CallbackQuery):
+        await safe_edit(cb_or_msg.message, txt, markup)
+    else:
+        await cb_or_msg.reply(txt, reply_markup=markup)
+
+
+async def _resolve_saved(row) -> Track:
+    """Turn a saved_tracks row back into a playable Track."""
+    if row["file_id"]:
+        path = await ctx.BOT_APP.download_media(row["file_id"])
+        if not path:
+            raise RuntimeError("Could not re-download the saved file.")
+        return Track(
+            title=row["title"],
+            duration=row["duration"],
+            file_path=path,
+            source="telegram",
+            is_video=bool(row["is_video"]),
+            file_id=row["file_id"],
+        )
+    url = row["url"] or row["source"]
+    return await downloader.resolve_url(
+        url,
+        is_video=bool(row["is_video"]),
+        requester_name="💾 Saved",
+    )

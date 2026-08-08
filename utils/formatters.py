@@ -39,8 +39,10 @@ def readable_size(num_bytes: int) -> str:
     return f"{size:.1f} GB"
 
 
-def truncate(text: str, limit: int = 50) -> str:
-    text = text.replace("\n", " ")
+def truncate(text, limit: int = 50) -> str:
+    if text is None:
+        return ""
+    text = str(text).replace("\n", " ")
     return text if len(text) <= limit else text[: limit - 1] + "…"
 
 

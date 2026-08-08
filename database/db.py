@@ -65,6 +65,20 @@ CREATE TABLE IF NOT EXISTS playlists (
     items TEXT,
     created_at INTEGER
 );
+CREATE TABLE IF NOT EXISTS saved_tracks (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    title TEXT NOT NULL,
+    source TEXT NOT NULL,
+    source_key TEXT NOT NULL UNIQUE,
+    url TEXT DEFAULT '',
+    file_id TEXT DEFAULT '',
+    is_video INTEGER DEFAULT 0,
+    duration INTEGER DEFAULT 0,
+    requester_id INTEGER DEFAULT 0,
+    plays INTEGER DEFAULT 1,
+    last_played INTEGER DEFAULT 0,
+    created_at INTEGER DEFAULT 0
+);
 """
 
 
@@ -232,3 +246,46 @@ class Database:
 
     async def delete_playlist(self, playlist_id: int) -> None:
         await self._exec("DELETE FROM playlists WHERE id=?", (playlist_id,))
+
+    # ---------- saved tracks (auto library of everything played) ----------
+    async def save_track(
+        self,
+        *,
+        title: str,
+        source: str,
+        url: str = "",
+        file_id: str = "",
+        is_video: bool = False,
+        duration: int = 0,
+        requester_id: int = 0,
+    ) -> None:
+        """Upsert a played track; bumps play count when re-played."""
+        key = (url or file_id).strip()
+        if not key:
+            return
+        now = int(time.time())
+        await self._exec(
+            "INSERT INTO saved_tracks (title, source, source_key, url, file_id, is_video,"
+            " duration, requester_id, plays, last_played, created_at)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)"
+            " ON CONFLICT(source_key) DO UPDATE SET"
+            " title=excluded.title, source=excluded.source, is_video=excluded.is_video,"
+            " duration=excluded.duration, plays=plays+1, last_played=excluded.last_played",
+            (
+                title, source, key, url, file_id,
+                1 if is_video else 0, duration, requester_id, now, now,
+            ),
+        )
+
+    async def saved_tracks_page(self, limit: int = 6, offset: int = 0):
+        return await self._all(
+            "SELECT * FROM saved_tracks ORDER BY last_played DESC LIMIT ? OFFSET ?",
+            (limit, offset),
+        )
+
+    async def count_saved_tracks(self) -> int:
+        row = await self._one("SELECT COUNT(*) AS c FROM saved_tracks")
+        return row["c"] if row else 0
+
+    async def get_saved_track(self, track_id: int):
+        return await self._one("SELECT * FROM saved_tracks WHERE id=?", (track_id,))

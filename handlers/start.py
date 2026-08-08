@@ -114,6 +114,13 @@ def register(app: Client) -> None:
             await _send_stats(cb.message)
             return
 
+        if action == "saved":
+            await cb.answer()
+            from handlers.player import show_saved  # local import avoids cycles
+
+            await show_saved(cb, page=1)
+            return
+
         if action == "dev":
             await cb.answer()
             await safe_edit(

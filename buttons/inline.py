@@ -23,7 +23,7 @@ def main_menu(is_admin: bool = False) -> InlineKeyboardMarkup:
     kb = [
         _row(_btn("🎵 Play Music", "main:music"), _btn("🎬 Play Video", "main:video")),
         _row(_btn("📜 Help", "main:help"), _btn("⚙️ Settings", "main:settings")),
-        _row(_btn("📊 Bot Stats", "main:stats"), _btn("👨‍💻 Developer", "main:dev")),
+        _row(_btn("📊 Bot Stats", "main:stats"), _btn("💾 Saved", "main:saved"), _btn("👨‍💻 Developer", "main:dev")),
     ]
     if is_admin:
         kb.append(_row(_btn("👑 Admin Panel", "main:admin")))
@@ -84,6 +84,29 @@ def queue_kb(page: int, total_pages: int, is_admin: bool = False) -> InlineKeybo
     if is_admin:
         kb.append(_row(_btn("🗑️ Clear Queue", "q:clear")))
     kb.append(_row(_btn("❌ Close", "q:close")))
+    return InlineKeyboardMarkup(kb)
+
+
+# --------------------------------------------------------------------------
+# Saved library (auto history of every played track)
+# --------------------------------------------------------------------------
+def _short(s: str, n: int = 26) -> str:
+    return s if len(s) <= n else s[: n - 1] + "…"
+
+
+def saved_kb(items, page: int, total_pages: int) -> InlineKeyboardMarkup:
+    kb = []
+    for it in items:
+        icon = "🎬" if it["is_video"] else "🎵"
+        kb.append(_row(_btn(f"{icon} {_short(it['title'])}", f"sv:play:{it['id']}")))
+    nav = []
+    if page > 1:
+        nav.append(_btn("⬅️ Prev", f"sv:pg:{page - 1}"))
+    nav.append(_btn(f"{page}/{total_pages}", "sv:nop"))
+    if page < total_pages:
+        nav.append(_btn("Next ➡️", f"sv:pg:{page + 1}"))
+    kb.append(_row(*nav))
+    kb.append(_row(_btn("⬅️ Back", "main:back"), _btn("❌ Close", "main:close")))
     return InlineKeyboardMarkup(kb)
 
 

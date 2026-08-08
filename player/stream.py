@@ -82,6 +82,7 @@ class Streamer:
             self._playing_file[chat_id] = track.file_path
             manager.set_paused(chat_id, False)
             logger.info("Now playing in %s: %s", chat_id, track.title)
+            await self._save_to_library(track)
         except Exception as e:
             logger.error("play failed in %s: %s", chat_id, e)
             # re-join attempt (auto reconnect)
@@ -144,6 +145,30 @@ class Streamer:
             await self.pytgcalls.leave_call(chat_id, close=True)
         except Exception:
             pass
+
+    # ------------------------------------------------------------------
+    async def _save_to_library(self, track: Track) -> None:
+        """Persist every played track so it can be replayed later (💾 Saved)."""
+        try:
+            from handlers.context import DB  # runtime import avoids import cycle
+
+            if track.stream_url:
+                source, url, file_id = "youtube", track.stream_url, ""
+            elif track.file_id:
+                source, url, file_id = "telegram", "", track.file_id
+            else:
+                return  # nothing replayable
+            await DB.save_track(
+                title=track.title,
+                source=source,
+                url=url,
+                file_id=file_id,
+                is_video=track.is_video,
+                duration=track.duration,
+                requester_id=track.requester_id,
+            )
+        except Exception as e:  # library must never break playback
+            logger.warning("save_track failed: %s", e)
 
     # ------------------------------------------------------------------
     async def _notify_finished(self, chat_id: int) -> None:

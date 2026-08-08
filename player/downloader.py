@@ -23,7 +23,7 @@ def _sanitize(name: str) -> str:
     return "".join(c for c in name if c.isalnum() or c in " ._-")[:60].strip()
 
 
-CLIENT_FALLBACKS = ["tv", "tv_embedded", "web_embedded", "android_vr", "mweb", "web_safari"]
+CLIENT_FALLBACKS = ["web", "tv", "android", "ios", "mweb"]
 
 
 def _ydl_opts(is_video: bool, client: str | None = None) -> dict:
@@ -117,7 +117,6 @@ async def resolve_track(app, message: Message, query: str, is_video: bool = Fals
     Resolve a query/url into a downloaded Track.
     Handles: YouTube links, plain searches, and Telegram audio/video files.
     """
-    loop = asyncio.get_running_loop()
     requester = message.from_user
 
     # ----- Telegram file? -----
@@ -126,7 +125,7 @@ async def resolve_track(app, message: Message, query: str, is_video: bool = Fals
         file_path = await app.download_media(message)
         if not file_path:
             raise RuntimeError("Could not download the Telegram file.")
-        title = getattr(media, "title", None) or getattr(media, "file_name", "Telegram media")
+        title = getattr(media, "title", None) or getattr(media, "file_name", None) or "Telegram media"
         duration = getattr(media, "duration", 0) or 0
         if not is_video and message.video is not None:
             is_video = True
@@ -138,9 +137,29 @@ async def resolve_track(app, message: Message, query: str, is_video: bool = Fals
             requester_id=requester.id if requester else 0,
             requester_name=(requester.first_name or "") if requester else "",
             is_video=is_video,
+            file_id=getattr(media, "file_id", ""),
         )
 
-    # ----- yt-dlp -----
+    # ----- yt-dlp (YouTube link / search / direct media URL) -----
+    return await _resolve_ytdlp(query, is_video, requester)
+
+
+async def resolve_url(
+    url: str, is_video: bool = False, requester_id: int = 0, requester_name: str = ""
+) -> Track:
+    """Replay helper: resolve a saved URL back into a downloadable Track (no Message needed)."""
+    return await _resolve_ytdlp(url, is_video, None, requester_id, requester_name)
+
+
+async def _resolve_ytdlp(
+    query: str,
+    is_video: bool,
+    requester,
+    requester_id: int = 0,
+    requester_name: str = "",
+) -> Track:
+    """Shared yt-dlp path used by both resolve_track (new plays) and resolve_url (replays)."""
+    loop = asyncio.get_running_loop()
     info = await loop.run_in_executor(None, extract_info, query)
     title = info.get("title") or info.get("id") or "Unknown"
     duration = int(info.get("duration") or 0)
@@ -166,13 +185,15 @@ async def resolve_track(app, message: Message, query: str, is_video: bool = Fals
         raise RuntimeError("Download finished but no file was found in cache.")
     file_path = os.path.join(config.CACHE_DIR, files[0])
 
+    rid = requester.id if requester else requester_id
+    rname = (requester.first_name or "") if requester else requester_name
     return Track(
         title=title,
         duration=duration,
         file_path=file_path,
         source=query,
-        requester_id=requester.id if requester else 0,
-        requester_name=(requester.first_name or "") if requester else "",
+        requester_id=rid,
+        requester_name=rname,
         is_video=is_video,
         thumbnail=info.get("thumbnail", ""),
         stream_url=info.get("webpage_url", ""),
