@@ -552,7 +552,25 @@ async def _ensure_streamer_in_chat(chat_id: int) -> bool:
     except Exception:
         return False
     try:
-        await ctx.BOT_APP.add_chat_members(chat_id, ctx.USER_APP.me.id)
+        try:
+            await ctx.BOT_APP.add_chat_members(chat_id, ctx.USER_APP.me.id)
+        except Exception as e:
+            # bots can only add users who messaged the bot first — fall back
+            # to an invite-link join (works whenever the bot is admin)
+            logger.warning("add_chat_members failed in %s (%s) — trying invite link", chat_id, e)
+            try:
+                link = await ctx.BOT_APP.create_chat_invite_link(chat_id, member_limit=1)
+                await ctx.USER_APP.join_chat(link.invite_link)
+            except Exception as e2:
+                # maybe we're actually a member already — don't false-fail
+                try:
+                    member = await ctx.USER_APP.get_chat_member(chat_id, ctx.USER_APP.me.id)
+                    status = str(member.status).split(".")[-1].lower()
+                    if status not in ("member", "administrator", "creator"):
+                        raise
+                except Exception:
+                    logger.warning("invite-link join failed in %s: %s", chat_id, e2)
+                    raise
         await asyncio.sleep(1.5)
         # prime the userbot's peer cache so PyTgCalls can interact with the chat
         primed = False
