@@ -574,7 +574,18 @@ async def _ensure_streamer_in_chat(chat_id: int) -> bool:
                 logger.warning("add_chat_members failed in %s (%s) — trying invite link", chat_id, e)
                 try:
                     link = await ctx.BOT_APP.create_chat_invite_link(chat_id, member_limit=1)
-                    await ctx.USER_APP.join_chat(link.invite_link)
+                    try:
+                        await ctx.USER_APP.join_chat(link.invite_link)
+                    except Exception:
+                        # INVITE_HASH_EXPIRED on a fresh link usually means the
+                        # streamer is banned — unban via the bot admin, then rejoin
+                        logger.warning("streamer join failed — trying unban + rejoin in %s", chat_id)
+                        try:
+                            await ctx.BOT_APP.unban_chat_member(chat_id, ctx.USER_APP.me.id)
+                            await asyncio.sleep(0.5)
+                            await ctx.USER_APP.join_chat(link.invite_link)
+                        except Exception:
+                            raise
                 except Exception as e2:
                     logger.warning("invite-link join failed in %s: %s", chat_id, e2)
                     raise
