@@ -7,8 +7,10 @@ re-join on unexpected disconnect, file cleanup after each track.
 """
 import asyncio
 import logging
+import random
 
 from pyrogram import Client
+from pyrogram.raw.functions.phone import CreateGroupCall
 from pytgcalls import PyTgCalls
 from pytgcalls.types import ChatUpdate, GroupCallConfig, MediaStream, StreamEnded, Update
 from pytgcalls.types.stream import AudioQuality, VideoQuality
@@ -94,8 +96,48 @@ class Streamer:
         await self._safe_play(chat_id, nxt)
 
     # ------------------------------------------------------------------
+    async def _call_active(self, chat_id: int) -> bool:
+        """True when a voice/video chat is actually running in the group.
+
+        Uses raw MTProto: ChatFull.call is a GroupCall when a call is live,
+        None when no (or ended) call. Supergroups = GetFullChannel, basic
+        groups = GetFullChat.
+        """
+        try:
+            from pyrogram.raw import functions
+            from pyrogram.raw.types import InputPeerChannel, InputPeerChat
+
+            peer = await self.app.resolve_peer(chat_id)
+            if isinstance(peer, InputPeerChannel):
+                full = await self.app.invoke(functions.channels.GetFullChannel(channel=peer))
+            elif isinstance(peer, InputPeerChat):
+                full = await self.app.invoke(functions.messages.GetFullChat(chat_id=peer.chat_id))
+            else:
+                return False
+            return getattr(full, "call", None) is not None
+        except Exception:
+            return False
+
+    async def _ensure_call(self, chat_id: int) -> None:
+        """Create the group voice chat if none is active (auto-start call)."""
+        if await self._call_active(chat_id):
+            return
+        await self.app.invoke(
+            CreateGroupCall(
+                peer=await self.app.resolve_peer(chat_id),
+                random_id=random.randint(1, 2**31),
+                rtmp_stream=False,
+            )
+        )
+        await asyncio.sleep(2.5)  # let the call actually start
+
     async def _safe_play(self, chat_id: int, track: Track) -> None:
         try:
+            # no active call? start one automatically (voice chat)
+            try:
+                await self._ensure_call(chat_id)
+            except Exception as e:
+                logger.warning("create call in %s: %s — letting auto_start handle it", chat_id, e)
             await self.pytgcalls.play(
                 chat_id,
                 MediaStream(
@@ -137,8 +179,16 @@ class Streamer:
                     pass
 
     async def play_track(self, chat_id: int, track: Track) -> bool:
-        """Play immediately (queue start) or queue if already playing."""
+        """Play immediately (queue start) or queue if already playing.
+
+        Self-heals stale state: if the manager thinks something is playing but no
+        voice chat is actually running, reset and start fresh instead of queuing.
+        """
         st = manager.get(chat_id)
+        if st.playing and not await self._call_active(chat_id):
+            logger.warning("stale playing state in %s (no active call) — resetting", chat_id)
+            manager.stop(chat_id)
+            st = manager.get(chat_id)
         if st.playing:
             return False
         manager.set_current(chat_id, track)
