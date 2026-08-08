@@ -63,6 +63,11 @@ async def main() -> None:
     streamer = Streamer(user)
     set_context(bot, user, db, streamer)
 
+    # forward any error to the owner's DM (throttled + deduped)
+    from modules.error_reporter import install as install_error_reporter
+
+    install_error_reporter()
+
     # register handlers
     start.register(bot)
     player.register(bot)
