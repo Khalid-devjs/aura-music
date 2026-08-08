@@ -163,7 +163,13 @@ class Streamer:
             logger.error("play failed in %s: %s", chat_id, e)
             # re-join attempt (auto reconnect) — fresh call if the old one died
             try:
-                await self.pytgcalls.leave_call(chat_id, close=False)
+                try:
+                    await self.pytgcalls.leave_call(chat_id, close=False)
+                except Exception as leave_e:
+                    # GROUPCALL_FORBIDDEN = streamer isn't a participant
+                    # (call already dead/never joined) — nothing to leave,
+                    # that's fine. Don't let this abort the retry.
+                    logger.warning("leave before retry in %s: %s", chat_id, leave_e)
                 await asyncio.sleep(1)
                 if not await self._call_active(chat_id):
                     await self._ensure_call(chat_id)
