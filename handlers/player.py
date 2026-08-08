@@ -88,7 +88,12 @@ def register(app: Client) -> None:
 
         # boss bot auto-adds the streamer userbot if it's missing from the group
         if not await _ensure_streamer_in_chat(target_chat):
-            await message.reply("⚠️ I couldn't add the **streamer** to this group.\n\n**Make sure I am an admin** here (Admin rights → Add members & Invite users), then try again.\n\nIf it still fails, add **@teleaddbyking** to the group manually (it may have been removed/banned).")
+            await message.reply(
+                "⚠️ The streamer **@teleaddbyking** isn't a member here.\n\n"
+                "Telegram doesn't let bots add members to groups — only an admin can.\n\n"
+                "👉 **Add or unban it manually:** group settings → **Members** → **Add Members** → `@teleaddbyking`\n\n"
+                "Then try `/play` again."
+            )
             return
 
         try:
@@ -134,7 +139,12 @@ def register(app: Client) -> None:
             return
         # boss bot auto-adds the streamer userbot if it's missing from the group
         if not await _ensure_streamer_in_chat(message.chat.id):
-            await message.reply("⚠️ I couldn't add the **streamer** to this group.\n\n**Make sure I am an admin** here (Admin rights → Add members & Invite users), then try again.\n\nIf it still fails, add **@teleaddbyking** to the group manually (it may have been removed/banned).")
+            await message.reply(
+                "⚠️ The streamer **@teleaddbyking** isn't a member here.\n\n"
+                "Telegram doesn't let bots add members to groups — only an admin can.\n\n"
+                "👉 **Add or unban it manually:** group settings → **Members** → **Add Members** → `@teleaddbyking`\n\n"
+                "Then try `/play` again."
+            )
             return
         status = await message.reply(PROCESSING)
         try:
@@ -555,33 +565,15 @@ async def _ensure_streamer_in_chat(chat_id: int) -> bool:
         try:
             await ctx.BOT_APP.add_chat_members(chat_id, ctx.USER_APP.me.id)
         except Exception as e:
-            # bots can only add users who messaged the bot first — fall back
-            # to an invite-link join (works whenever the bot is admin)
+            # bots can't add members to supergroups (BOT_METHOD_INVALID) —
+            # try an invite-link join (works unless the streamer is banned)
             logger.warning("add_chat_members failed in %s (%s) — trying invite link", chat_id, e)
             try:
                 link = await ctx.BOT_APP.create_chat_invite_link(chat_id, member_limit=1)
-                try:
-                    await ctx.USER_APP.join_chat(link.invite_link)
-                except Exception:
-                    # INVITE_HASH_EXPIRED on a fresh link usually means the
-                    # streamer is banned — unban via the bot admin, then rejoin
-                    logger.warning("streamer join failed — trying unban + rejoin in %s", chat_id)
-                    try:
-                        await ctx.BOT_APP.unban_chat_member(chat_id, ctx.USER_APP.me.id)
-                        await asyncio.sleep(1)
-                        await ctx.USER_APP.join_chat(link.invite_link)
-                    except Exception:
-                        raise
+                await ctx.USER_APP.join_chat(link.invite_link)
             except Exception as e2:
-                # maybe we're actually a member already — don't false-fail
-                try:
-                    member = await ctx.USER_APP.get_chat_member(chat_id, ctx.USER_APP.me.id)
-                    status = str(member.status).split(".")[-1].lower()
-                    if status not in ("member", "administrator", "creator"):
-                        raise
-                except Exception:
-                    logger.warning("invite-link join failed in %s: %s", chat_id, e2)
-                    raise
+                logger.warning("invite-link join failed in %s: %s", chat_id, e2)
+                raise
         await asyncio.sleep(1.5)
         # prime the userbot's peer cache so PyTgCalls can interact with the chat
         primed = False
@@ -602,8 +594,15 @@ async def _ensure_streamer_in_chat(chat_id: int) -> bool:
                 can_manage_video_chats=True,
                 can_invite_users=True,
             )
-        except Exception:
-            pass  # promotion is best-effort; streaming still works without it
+            await asyncio.sleep(0.5)
+            try:
+                member = await ctx.BOT_APP.get_chat_member(chat_id, ctx.USER_APP.me.id)
+                if str(member.status).split(".")[-1].lower() != "administrator":
+                    logger.warning("streamer NOT admin after promote in %s — bot may lack 'manage voice chats' right", chat_id)
+            except Exception:
+                pass
+        except Exception as e:
+            logger.warning("promote failed in %s: %s", chat_id, e)
         _streamer_ok_chats.add(chat_id)
         return True
     except Exception as e:

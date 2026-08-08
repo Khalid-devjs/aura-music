@@ -169,12 +169,21 @@ class Streamer:
                 downloader.delete_file(old)
                 manager.stop(chat_id)
                 try:
-                    await self.app.send_message(
-                        chat_id,
-                        "❌ **Could not start playback.**\n\n"
-                        "Make sure the **boss bot** is an admin here, the voice chat is open, "
-                        f"and the streamer is a member.\n`{e2}`",
-                    )
+                    if "CHAT_ADMIN_REQUIRED" in str(e2):
+                        await self.app.send_message(
+                            chat_id,
+                            "❌ **Could not start the voice chat** — the streamer isn't an admin here.\n\n"
+                            "Give the **boss bot full admin** rights in this group (especially **Manage voice chats**), "
+                            "or set **Who can start voice chats** to *All members* in group settings.\n"
+                            "If **@teleaddbyking** shows as banned, unban it (group settings → Members).",
+                        )
+                    else:
+                        await self.app.send_message(
+                            chat_id,
+                            "❌ **Could not start playback.**\n\n"
+                            "Make sure the **boss bot** is an admin here, the voice chat is open, "
+                            f"and the streamer is a member.\n`{e2}`",
+                        )
                 except Exception:
                     pass
 
