@@ -31,9 +31,12 @@ class Streamer:
 
     # ------------------------------------------------------------------
     async def start(self) -> None:
-        self.pytgcalls.on_update(self._on_update)
+        # NOTE: on_update() is a decorator FACTORY in py-tgcalls 2.2.x —
+        # must be called: on_update()(handler). `on_update(handler)` silently
+        # registers nothing (the decorator is returned, never applied).
+        self.pytgcalls.on_update()(self._on_update)
         await self.pytgcalls.start()
-        logger.info("PyTgCalls started")
+        logger.info("PyTgCalls started (update handler registered)")
 
     # ------------------------------------------------------------------
     async def _on_update(self, *args, **kwargs) -> None:
