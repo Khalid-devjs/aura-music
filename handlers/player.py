@@ -544,6 +544,7 @@ async def _auto_delete(message: Message, delay_ms: int):
 
 
 _streamer_ok_chats: set = set()
+_promote_warned: set = set()
 
 
 async def _ensure_streamer_in_chat(chat_id: int) -> bool:
@@ -630,6 +631,16 @@ async def _ensure_streamer_in_chat(chat_id: int) -> bool:
             pass
     except Exception as e:
         logger.warning("promote failed in %s: %s", chat_id, e)
+        if chat_id not in _promote_warned:
+            _promote_warned.add(chat_id)
+            try:
+                await ctx.BOT_APP.send_message(
+                    chat_id,
+                    "⚠️ I can't promote the streamer to admin here — make **me an admin** "
+                    "in this group for full auto features (auto-start + auto-end of the call).",
+                )
+            except Exception:
+                pass
     _streamer_ok_chats.add(chat_id)
     return True
 

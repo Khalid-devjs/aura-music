@@ -158,13 +158,19 @@ class Streamer:
             await self._save_to_library(track)
         except Exception as e:
             logger.error("play failed in %s: %s", chat_id, e)
-            # re-join attempt (auto reconnect)
+            # re-join attempt (auto reconnect) — fresh call if the old one died
             try:
                 await self.pytgcalls.leave_call(chat_id, close=False)
-                await asyncio.sleep(2)
+                await asyncio.sleep(1)
+                if not await self._call_active(chat_id):
+                    await self._ensure_call(chat_id)
                 await self.pytgcalls.play(
                     chat_id,
-                    MediaStream(track.file_path),
+                    MediaStream(
+                        track.file_path,
+                        audio_parameters=AudioQuality.HIGH,
+                        video_parameters=VideoQuality.HD_720p if track.is_video else VideoQuality.SD_360p,
+                    ),
                     GroupCallConfig(auto_start=True),
                 )
                 manager.set_paused(chat_id, False)
