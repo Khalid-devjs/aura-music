@@ -161,7 +161,7 @@ async def _send_stats(message: Message):
     import time
 
     uptime = int(time.time() - ctx.START_TIME)
-    active = len(ctx.STREAMER.active_calls()) if ctx.STREAMER else 0
+    active = len(await ctx.STREAMER.active_calls()) if ctx.STREAMER else 0
     h, rem = divmod(uptime, 3600)
     m, s = divmod(rem, 60)
     txt = STATS_TMPL.format(

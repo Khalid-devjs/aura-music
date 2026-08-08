@@ -6,6 +6,7 @@ cache dir so playback is stable and files can be auto-cleaned.
 """
 import asyncio
 import os
+import re
 import time
 
 import logging
@@ -48,6 +49,10 @@ def _ydl_opts(is_video: bool, client: str | None = None) -> dict:
             else []
         ),
         "max_filesize": config.MAX_TRACK_SIZE_MB * 1024 * 1024,
+        # deno JS runtime + remote EJS challenge-solver script are REQUIRED for
+        # YouTube signature/n solving (2026+). Without them most formats come
+        # back without URLs -> "Requested format is not available".
+        "remote_components": {"ejs:github"},
     }
     # Alternate player clients dodge datacenter bot-checks; cookies fix hard blocks.
     if client and client != "default":
@@ -98,7 +103,7 @@ def _search_terms(query: str) -> str:
     query = query.strip()
     if query.startswith(("http://", "https://", "www.")):
         return query
-    if query.startswith("ytsearch:"):
+    if re.match(r"^ytsearch\d*:", query):  # already a ytsearch URL (idempotent)
         return query
     return f"ytsearch1:{query}"
 
@@ -159,6 +164,7 @@ async def _resolve_ytdlp(
     requester_name: str = "",
 ) -> Track:
     """Shared yt-dlp path used by both resolve_track (new plays) and resolve_url (replays)."""
+    query = _search_terms(query)  # wrap plain searches so BOTH extract & download work
     loop = asyncio.get_running_loop()
     info = await loop.run_in_executor(None, extract_info, query)
     title = info.get("title") or info.get("id") or "Unknown"
@@ -166,7 +172,6 @@ async def _resolve_ytdlp(
     if config.MAX_DURATION and duration > config.MAX_DURATION:
         raise RuntimeError(f"Track is {duration}s — longer than the {config.MAX_DURATION}s limit.")
 
-    ydl_opts = _ydl_opts(is_video)
     outtmpl = os.path.join(
         config.CACHE_DIR, f"{int(time.time())}_{_sanitize(title)[:30]}.%(ext)s"
     )
@@ -177,7 +182,11 @@ async def _resolve_ytdlp(
     await loop.run_in_executor(None, _download)
 
     files = sorted(
-        (f for f in os.listdir(config.CACHE_DIR) if f.startswith(os.path.basename(ydl_opts["outtmpl"]).split("%(ext)s")[0])),
+        (
+            f
+            for f in os.listdir(config.CACHE_DIR)
+            if f.startswith(os.path.basename(outtmpl).split("%(ext)s")[0])
+        ),
         key=lambda f: os.path.getmtime(os.path.join(config.CACHE_DIR, f)),
         reverse=True,
     )

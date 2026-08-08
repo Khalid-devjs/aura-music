@@ -7,6 +7,10 @@ Two Pyrogram clients:
   • user  — voice-chat streaming client (user string session, drives PyTgCalls)
 """
 import asyncio
+import os
+
+# yt-dlp needs a JS runtime (deno) to solve YouTube signatures — put it on PATH.
+os.environ["PATH"] = os.path.expanduser("~/.deno/bin") + os.pathsep + os.environ.get("PATH", "")
 
 # ---- compat shim: py-tgcalls 2.3.x expects exceptions absent from pyrogram 2.0.106 ----
 import pyrogram.errors as _pyro_errors
