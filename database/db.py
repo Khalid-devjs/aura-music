@@ -289,3 +289,11 @@ class Database:
 
     async def get_saved_track(self, track_id: int):
         return await self._one("SELECT * FROM saved_tracks WHERE id=?", (track_id,))
+
+    async def delete_saved_track(self, track_id: int) -> bool:
+        """Delete a saved track. Returns True if a row was removed."""
+        row = await self._one("SELECT id FROM saved_tracks WHERE id=?", (track_id,))
+        if not row:
+            return False
+        await self._exec("DELETE FROM saved_tracks WHERE id=?", (track_id,))
+        return True

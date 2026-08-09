@@ -114,11 +114,15 @@ def saved_hint_kb() -> InlineKeyboardMarkup:
     )
 
 
-def saved_kb(items, page: int, total_pages: int) -> InlineKeyboardMarkup:
+def saved_kb(items, page: int, total_pages: int, is_owner: bool = False) -> InlineKeyboardMarkup:
     kb = []
     for it in items:
         icon = "🎬" if it["is_video"] else "🎵"
-        kb.append(_row(_btn(f"{icon} {_short(it['title'])}", f"sv:play:{it['id']}")))
+        row = [_btn(f"{icon} {_short(it['title'])}", f"sv:play:{it['id']}")]
+        # owner-only delete button on each saved track
+        if is_owner:
+            row.append(_btn("🗑️", f"sv:del:{it['id']}:{page}"))
+        kb.append(_row(*row))
     nav = []
     if page > 1:
         nav.append(_btn("⬅️ Prev", f"sv:pg:{page - 1}"))

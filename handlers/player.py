@@ -466,6 +466,25 @@ def register(app: Client) -> None:
         if action == "pg":
             await show_saved(cb, page=int(parts[2]))
             return
+        if action == "del":
+            # owner-only: delete a saved track from the library
+            if not guard.is_owner(user.id):
+                await cb.answer("👑 Only the owner can delete saved tracks.", show_alert=True)
+                return
+            track_id = int(parts[2])
+            row = await ctx.DB.get_saved_track(track_id)
+            if not row:
+                await cb.answer("Track already gone.", show_alert=True)
+                return
+            removed = await ctx.DB.delete_saved_track(track_id)
+            if not removed:
+                await cb.answer("Track already gone.", show_alert=True)
+                return
+            await cb.answer("🗑️ Deleted.")
+            # re-render the library on the current page
+            page = int(parts[3]) if len(parts) > 3 else 1
+            await show_saved(cb, page=page)
+            return
         if action != "play":
             return
 
@@ -810,12 +829,15 @@ async def show_saved(cb_or_msg, page: int = 1):
             dur = format_duration(r["duration"]) if r["duration"] else "?"
             icon = "🎬" if r["is_video"] else "🎵"
             lines.append(f"`{i}.` {icon} {truncate(r['title'], 42)} — {dur} · ▶️ {r['plays']}x")
+        # who is viewing? owner sees the 🗑️ delete buttons
+        viewer = cb_or_msg.from_user if isinstance(cb_or_msg, CallbackQuery) else getattr(cb_or_msg, "from_user", None)
+        is_owner = bool(viewer and guard.is_owner(viewer.id))
         txt = (
             f"💾 **Saved Library** ({total})\n\n"
             + "\n".join(lines)
-            + "\n\n_Tap a track to play it in this group._"
+            + ("\n\n_Tap a track to play it. 🗑️ deletes it._" if is_owner else "\n\n_Tap a track to play it in this group._")
         )
-        markup = kb.saved_kb(items, page, pages)
+        markup = kb.saved_kb(items, page, pages, is_owner=is_owner)
     if isinstance(cb_or_msg, CallbackQuery):
         await safe_edit(cb_or_msg.message, txt, markup)
     else:
