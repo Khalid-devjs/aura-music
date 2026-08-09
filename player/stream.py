@@ -342,29 +342,13 @@ class Streamer:
         if new_pos == st.seek_pos and delta != 0:
             return st.seek_pos
         manager.set_seek(chat_id, new_pos)
-        # NOTE: no _call_active() guard here — the manager already says
-        # st.playing=True (a track is loaded). _call_active() uses
-        # GetFullChannel which LAGS reality (fresh calls invisible for 10+s,
-        # dead calls linger), so it can false-negative right after a play
-        # and wrongly abort the seek. We trust manager state + the retry
-        # below handles a genuinely dead call.
+        # LIVE SEEK: pytgcalls.play() when already in a call does NOT
+        # leave/rejoin — it swaps the stream source in-place via
+        # set_stream_sources(CAPTURE). So we just play() a fresh MediaStream
+        # with ffmpeg `-ss <pos>` input seek. No call restart, no disconnect
+        # flicker — the stream keeps playing and jumps to the new position.
         try:
-            # drop cached call then re-join fresh with the seeked stream
-            try:
-                self.pytgcalls._app._bind_client._cache.drop_cache(chat_id)
-            except Exception:
-                pass
-            try:
-                await self.pytgcalls.leave_call(chat_id, close=False)
-            except Exception:
-                pass  # GROUPCALL_FORBIDDEN = fine (nothing to leave)
-            await asyncio.sleep(2.5)  # let the old stream die
-            # if the call died for real, recreate it before re-joining
-            try:
-                await self._ensure_call(chat_id)
-            except Exception as e:
-                logger.warning("seek ensure_call %s: %s", chat_id, e)
-            ss = f"-ss {int(new_pos)} " if new_pos > 0 else ""
+            ss = f"-ss {int(new_pos)} " if new_pos > 0 else None
             await self.pytgcalls.play(
                 chat_id,
                 MediaStream(
@@ -372,7 +356,7 @@ class Streamer:
                     audio_parameters=AudioQuality.HIGH,
                     video_parameters=VideoQuality.HD_720p
                     if track.is_video else VideoQuality.SD_360p,
-                    ffmpeg_parameters=ss or None,
+                    ffmpeg_parameters=ss,
                 ),
                 GroupCallConfig(auto_start=True),
             )
@@ -383,7 +367,7 @@ class Streamer:
                 except Exception:
                     pass
             self._playing_file[chat_id] = track.file_path
-            logger.info("Seek in %s → %ss (%s)", chat_id, new_pos, track.title)
+            logger.info("Live seek in %s → %ss (%s)", chat_id, new_pos, track.title)
             return new_pos
         except Exception as e:
             logger.error("seek failed in %s: %s", chat_id, e)
