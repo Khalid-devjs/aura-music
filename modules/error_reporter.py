@@ -63,7 +63,13 @@ class DMLogHandler(logging.Handler):
         try:
             if record.name not in ("auramusic", "pyrogram.dispatcher"):
                 return
-            fp = (record.name, record.getMessage()[:100])
+            # known-harmless noise: cold-cache peer resolve failures on
+            # fresh boots — the startup priming (main.py) fixes the cause,
+            # no need to DM the owner about each one.
+            msg0 = record.getMessage()
+            if "Peer id invalid" in msg0 or "ID not found" in msg0:
+                return
+            fp = (record.name, msg0[:100])
             now = time.monotonic()
             if now - self._recent.get(fp, 0) < DEDUPE_WINDOW:
                 return
@@ -71,7 +77,7 @@ class DMLogHandler(logging.Handler):
                 self._recent.clear()
             self._recent[fp] = now
 
-            msg = record.getMessage()[:400]
+            msg = msg0[:400]
             exc = ""
             if record.exc_info:
                 exc = "\n```\n" + "".join(traceback.format_exception(*record.exc_info))[-1200:] + "\n```"

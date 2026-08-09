@@ -86,6 +86,22 @@ async def main() -> None:
     if freed:
         log.info("Cache cleaned: %s bytes freed", freed)
 
+    # PRIME the userbot's peer cache. On a fresh process the peer cache is
+    # empty: incoming updates from groups the userbot hasn't "met" yet fail
+    # resolve_peer -> "Peer id invalid" noise. get_dialogs() forces Telegram
+    # to hand us every chat the userbot is in, populating the storage cache
+    # (get_chat() by raw id can itself fail resolve_peer — chicken-and-egg).
+    try:
+        primed = 0
+        async for d in user.get_dialogs():
+            cid = getattr(d.chat, "id", None)
+            if cid and cid < 0:
+                primed += 1
+        if primed:
+            log.info("Peer cache primed via get_dialogs (%d chats)", primed)
+    except Exception as e:
+        log.warning("peer priming via get_dialogs failed: %s", e)
+
     me = await bot.get_me()
     log.info("Bot online: @%s (id %s)", me.username, me.id)
 
