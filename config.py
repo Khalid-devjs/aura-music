@@ -57,7 +57,7 @@ RATE_LIMIT_WINDOW_S: int = _int("RATE_LIMIT_WINDOW_S", 4)
 BOT_USERNAME: str = os.getenv("BOT_USERNAME", "").strip()
 SUPPORT_CHAT: str = os.getenv("SUPPORT_CHAT", "").strip()
 BOT_NAME: str = os.getenv("BOT_NAME", "Aura Music")
-BOT_VERSION: str = os.getenv("BOT_VERSION", "1.6.4")
+BOT_VERSION: str = os.getenv("BOT_VERSION", "1.6.5")
 
 # ---------- Validation ----------
 def validate() -> None:

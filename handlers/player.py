@@ -90,6 +90,18 @@ def register(app: Client) -> None:
             return
         is_video = action == "play_video"
 
+        # ONLY group admins / bot admins / owner may PLAY music or video.
+        # Regular members use /request and wait for an admin to approve.
+        if not await _is_controller(message, alert=False):
+            await message.reply(
+                "👑 **Admins only!**\n\n"
+                "Only group admins (and the bot owner) can play music/videos.\n"
+                "Members: send `/request <song name>` and an admin will approve it. 🎧"
+            )
+            return
+        if not await _group_only(message):
+            return
+
         # a Telegram media file?
         has_media = bool(
             message.audio or message.video
@@ -171,6 +183,14 @@ def register(app: Client) -> None:
             await message.reply("🛑 **Aura is offline.** Please try again later. 😴")
             return
         if not await guard.can_use_bot(ctx.DB, user.id):
+            return
+        # ONLY group admins / bot admins / owner may play
+        if not await _is_controller(message, alert=False):
+            await message.reply(
+                "👑 **Admins only!**\n\n"
+                "Only group admins (and the bot owner) can play music/videos.\n"
+                "Members: send `/request <song name>` and an admin will approve it. 🎧"
+            )
             return
         if not is_group(str(message.chat.type)):
             await message.reply(
@@ -558,6 +578,11 @@ def register(app: Client) -> None:
             await show_saved(cb, page=page)
             return
         if action != "play":
+            return
+
+        # ONLY group admins / bot admins / owner may play from Saved
+        if not await _is_controller(cb, alert=False):
+            await cb.answer("👑 Admins only! Members use /request.", show_alert=True)
             return
 
         if not is_group(str(cb.message.chat.type)):

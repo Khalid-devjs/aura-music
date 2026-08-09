@@ -51,7 +51,7 @@ def register(app: Client) -> None:
                 "🎵 **Request a song**\n\n"
                 "Usage: `/request <song name or link>`\n"
                 "Example: `/request Burna Boy - Last Last`\n\n"
-                "Anyone in the group can **approve** it and it plays. 🎧"
+                "A group admin will **approve** it and it plays. 🎧"
             )
             return
         # If the requester is already a controller (admin), play directly —
@@ -83,10 +83,10 @@ def register(app: Client) -> None:
         await ctx.DB.add_user(user.id, user.username or "", user.first_name or "")
         # notify admins in the group
         await message.reply(
-            f"📨 **Request sent!**\n\n"
+            f"📨 **Request sent to admins!**\n\n"
             f"🎵 `{truncate(parts[1], 80)}`\n"
             f"👤 {user.first_name or 'Member'}\n\n"
-            f"_Anyone in the group can tap Approve to play it._",
+            f"_Waiting for an admin to approve…_",
             reply_markup=kb.request_status_kb(req_id),
         )
         # ping admins (best-effort)
@@ -160,9 +160,12 @@ def register(app: Client) -> None:
 
         if action in ("approve", "reject"):
             req_id = int(parts[2])
-            # ANY non-banned group member can approve/reject requests —
-            # it's a community vote, not admin-only. (The requester
-            # themselves can too — it's their request.)
+            from handlers.player import _is_controller
+            # ONLY group admins / bot admins / owner can approve or reject
+            ok = guard.is_owner(user.id) or await _is_controller(cb, alert=False)
+            if not ok:
+                await cb.answer("👑 Admins only!", show_alert=True)
+                return
             row = await ctx.DB.get_request(req_id)
             if not row:
                 await cb.answer("Request already handled.", show_alert=True)
