@@ -913,16 +913,27 @@ async def _is_controller(obj, alert: bool = True) -> bool:
         return False
     if await guard.is_admin(ctx.DB, user.id):
         return True
-    # group admin check (supergroup/group)
+    # group admin check (supergroup/group/channel — channels with
+    # discussion are also playable venues)
     chat = getattr(obj, "chat", None) or getattr(getattr(obj, "message", None), "chat", None)
     if chat and getattr(chat, "type", None):
-        if str(chat.type).split(".")[-1].lower() in ("group", "supergroup"):
+        ctype = str(chat.type).split(".")[-1].lower()
+        if ctype in ("group", "supergroup", "channel"):
             try:
                 member = await chat.get_member(user.id)
-                if str(member.status).split(".")[-1].lower() in ("administrator", "creator"):
+                st = str(member.status).split(".")[-1].lower()
+                if st in ("administrator", "creator", "owner"):
                     return True
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug("get_member(%s) in %s failed: %s", user.id, chat.id, e)
+                # fallback: try via bot client with resolved peer
+                try:
+                    member = await ctx.BOT_APP.get_chat_member(chat.id, user.id)
+                    st = str(member.status).split(".")[-1].lower()
+                    if st in ("administrator", "creator", "owner"):
+                        return True
+                except Exception:
+                    pass
     if alert:
         try:
             await obj.answer("👑 Group admins only can control the player!", show_alert=True)
