@@ -79,6 +79,16 @@ CREATE TABLE IF NOT EXISTS saved_tracks (
     last_played INTEGER DEFAULT 0,
     created_at INTEGER DEFAULT 0
 );
+CREATE TABLE IF NOT EXISTS req_tracks (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    chat_id INTEGER NOT NULL,
+    requester_id INTEGER NOT NULL,
+    requester_name TEXT DEFAULT '',
+    query TEXT NOT NULL,
+    is_video INTEGER DEFAULT 0,
+    status TEXT DEFAULT 'pending',
+    created_at INTEGER DEFAULT 0
+);
 """
 
 
@@ -297,3 +307,35 @@ class Database:
             return False
         await self._exec("DELETE FROM saved_tracks WHERE id=?", (track_id,))
         return True
+
+    # ---------- song requests (member → admin approval) ----------
+    async def add_request(
+        self, chat_id: int, requester_id: int, requester_name: str, query: str, is_video: bool = False
+    ) -> int:
+        now = int(time.time())
+        cur = await self._db.execute(
+            "INSERT INTO req_tracks (chat_id, requester_id, requester_name, query, is_video, status, created_at)"
+            " VALUES (?, ?, ?, ?, ?, 'pending', ?)",
+            (chat_id, requester_id, requester_name, query, 1 if is_video else 0, now),
+        )
+        await self._db.commit()
+        return cur.lastrowid or 0
+
+    async def pending_requests(self, chat_id: int):
+        return await self._all(
+            "SELECT * FROM req_tracks WHERE chat_id=? AND status='pending' ORDER BY created_at ASC",
+            (chat_id,),
+        )
+
+    async def count_pending_requests(self, chat_id: int) -> int:
+        row = await self._one(
+            "SELECT COUNT(*) AS c FROM req_tracks WHERE chat_id=? AND status='pending'",
+            (chat_id,),
+        )
+        return row["c"] if row else 0
+
+    async def get_request(self, req_id: int):
+        return await self._one("SELECT * FROM req_tracks WHERE id=?", (req_id,))
+
+    async def set_request_status(self, req_id: int, status: str) -> None:
+        await self._exec("UPDATE req_tracks SET status=? WHERE id=?", (status, req_id))

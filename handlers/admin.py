@@ -26,6 +26,11 @@ def register(app: Client) -> None:
     @rate_limited
     async def admin_cb(client: Client, cb: CallbackQuery):
         user = cb.from_user
+        # SOFT-SHUTDOWN GATE — owner keeps full access
+        from handlers.requests import is_bot_offline
+        if user and is_bot_offline() and not guard.is_owner(user.id):
+            await cb.answer("🛑 Aura is offline. 😴", show_alert=True)
+            return
         if not await guard.is_admin(ctx.DB, user.id):
             await cb.answer("👑 Admins only!", show_alert=True)
             return

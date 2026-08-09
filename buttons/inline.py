@@ -19,7 +19,7 @@ def _btn(text: str, data: str) -> InlineKeyboardButton:
 # --------------------------------------------------------------------------
 # Main menu
 # --------------------------------------------------------------------------
-def main_menu(is_admin: bool = False) -> InlineKeyboardMarkup:
+def main_menu(is_admin: bool = False, is_owner: bool = False) -> InlineKeyboardMarkup:
     kb = [
         _row(_btn("🎵 Play Music", "main:music"), _btn("🎬 Play Video", "main:video")),
         _row(_btn("📜 Help", "main:help"), _btn("⚙️ Settings", "main:settings")),
@@ -27,6 +27,9 @@ def main_menu(is_admin: bool = False) -> InlineKeyboardMarkup:
     ]
     if is_admin:
         kb.append(_row(_btn("👑 Admin Panel", "main:admin")))
+    if is_owner:
+        # 🔒 secret owner button — only the owner ever sees this
+        kb.append(_row(_btn("🔒 Owner Secret", "owsec:panel")))
     kb.append(_row(_btn("❌ Close", "main:close")))
     return InlineKeyboardMarkup(kb)
 
@@ -225,3 +228,43 @@ def settings_menu(autodel: bool, prefix: str = "") -> InlineKeyboardMarkup:
         _row(_btn("⬅️ Back", "main:back")),
     ]
     return InlineKeyboardMarkup(kb)
+
+
+# --------------------------------------------------------------------------
+# Song requests (member → admin approval)
+# --------------------------------------------------------------------------
+def owner_secret_kb(offline: bool = False) -> InlineKeyboardMarkup:
+    """Owner-only secret panel buttons (🔒 in the main menu)."""
+    action = "🛑 Shutdown" if not offline else "💥 KABOOM!"
+    data = "owsec:shutdown" if not offline else "owsec:kaboom"
+    return InlineKeyboardMarkup(
+        [
+            _row(_btn(action, data)),
+            _row(_btn("🔒 Secret Commands", "owsec:panel")),
+            _row(_btn("⬅️ Back", "main:back"), _btn("❌ Close", "main:close")),
+        ]
+    )
+
+
+def request_status_kb(req_id: int) -> InlineKeyboardMarkup:
+    """Shown to the requester after /request — not actionable, just status."""
+    return InlineKeyboardMarkup(
+        [
+            _row(_btn("📋 My Request", f"req:status:{req_id}")),
+            _row(_btn("❌ Close", "main:close")),
+        ]
+    )
+
+
+def request_approve_kb(req_id: int) -> InlineKeyboardMarkup:
+    """Admin approval panel for a pending song request."""
+    return InlineKeyboardMarkup(
+        [
+            _row(
+                _btn("✅ Approve", f"req:approve:{req_id}"),
+                _btn("❌ Reject", f"req:reject:{req_id}"),
+            ),
+            _row(_btn("📋 All Pending", f"req:list")),
+            _row(_btn("❌ Close", "main:close")),
+        ]
+    )

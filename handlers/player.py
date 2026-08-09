@@ -46,7 +46,14 @@ def register(app: Client) -> None:
     )
     async def on_user_input(client: Client, message: Message):
         user = message.from_user
-        if not user or not await guard.can_use_bot(ctx.DB, user.id):
+        if not user:
+            return
+        # SOFT-SHUTDOWN GATE: bot is offline except for the owner
+        from handlers.requests import is_bot_offline
+        if is_bot_offline() and not guard.is_owner(user.id):
+            await message.reply("🛑 **Aura is offline.** Please try again later. 😴")
+            return
+        if not await guard.can_use_bot(ctx.DB, user.id):
             return
         req = ctx.pending.pop(user.id)
         if not req:
@@ -149,7 +156,14 @@ def register(app: Client) -> None:
     @app.on_message(filters.command(["play", "vplay"], prefixes=["/", "!"]))
     async def play_cmd(client: Client, message: Message):
         user = message.from_user
-        if not user or not await guard.can_use_bot(ctx.DB, user.id):
+        if not user:
+            return
+        # SOFT-SHUTDOWN GATE
+        from handlers.requests import is_bot_offline
+        if is_bot_offline() and not guard.is_owner(user.id):
+            await message.reply("🛑 **Aura is offline.** Please try again later. 😴")
+            return
+        if not await guard.can_use_bot(ctx.DB, user.id):
             return
         if not is_group(str(message.chat.type)):
             await message.reply(
@@ -454,7 +468,14 @@ def register(app: Client) -> None:
     @rate_limited
     async def saved_cb(client: Client, cb: CallbackQuery):
         user = cb.from_user
-        if not user or not await guard.can_use_bot(ctx.DB, user.id):
+        if not user:
+            return
+        # SOFT-SHUTDOWN GATE
+        from handlers.requests import is_bot_offline
+        if is_bot_offline() and not guard.is_owner(user.id):
+            await cb.answer("🛑 Aura is offline. 😴", show_alert=True)
+            return
+        if not await guard.can_use_bot(ctx.DB, user.id):
             await cb.answer("🚫 Banned.", show_alert=True)
             return
         parts = cb.data.split(":")
@@ -527,6 +548,15 @@ async def _enqueue(chat_id: int, track: Track, app, status: Message, message: Me
         else:
             pos = manager.add_track(chat_id, track)
             await _notify_queued(status, track, pos)
+            # SMART: a stream is already going — let the chat know who added
+            # the next track (admin/member) so nobody is surprised by a takeover
+            requester_name = track.requester_name or "Someone"
+            smart_txt = (
+                f"🎧 **Up next** — added by **{requester_name}**\n"
+                f"🎵 {truncate(track.title, 60)}\n"
+                f"⏱ {format_duration(track.duration)} · position **#{pos}**"
+            )
+            await _chat_notice(chat_id, smart_txt, status)
             return pos
 
     # start playback
@@ -558,6 +588,17 @@ async def _notify_queued(status: Message, track: Track, pos: int):
         f"⏱ {format_duration(track.duration)} · 👤 {track.requester_name}"
     )
     await safe_edit(status, txt, kb.close_only())
+
+
+async def _chat_notice(chat_id: int, txt: str, status: Message | None):
+    """Send a notice to the chat (falls back to editing the status message)."""
+    try:
+        if status is not None:
+            await safe_edit(status, txt, kb.close_only())
+        else:
+            await ctx.BOT_APP.send_message(chat_id, txt)
+    except Exception as e:
+        logger.warning("chat_notice %s failed: %s", chat_id, e)
 
 
 def _now_playing_text(st) -> str:
@@ -768,9 +809,18 @@ async def _is_controller(obj, alert: bool = True) -> bool:
     """Player controls = bot owner + bot admins + GROUP admins only.
 
     `alert=False` makes it silent (used when deciding whether to SHOW admin buttons).
+    SOFT-SHUTDOWN: while offline, only the owner controls anything.
     """
     user = obj.from_user
     if not user:
+        return False
+    from handlers.requests import is_bot_offline
+    if is_bot_offline() and not guard.is_owner(user.id):
+        if alert:
+            try:
+                await obj.answer("🛑 Aura is offline. 😴", show_alert=True)
+            except Exception:
+                pass
         return False
     if await guard.is_admin(ctx.DB, user.id):
         return True

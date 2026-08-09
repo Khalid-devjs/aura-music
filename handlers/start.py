@@ -21,19 +21,41 @@ WELCOME = (
     "**Made with ❤️ — buttons only, no commands needed.**"
 )
 
+WELCOME_OWNER = (
+    "👑 **Hey boss, {first}!** I know you — you're my **owner**. 😎\n\n"
+    "I see a special **🔒 Owner Secret** button in the menu below.\n"
+    "It hides your secret commands (`/shutdown`, `/kaboom`) so you can\n"
+    "switch me off and on whenever you want — and no one else can touch it.\n\n"
+    "I'm fully alive and streaming. Ready when you are, boss. 🎧✨"
+)
+
 HELP = (
-    "📜 **Help Center**\n\n"
-    "**🎵 Music** — tap Play Music, then send a song name, YouTube link, or audio file.\n"
-    "**🎬 Video** — same, but streams video in the voice chat.\n"
-    "**⏸️ Pause / ▶️ Resume** — pause and resume playback.\n"
-    "**⏭️ Skip** — skip to the next track in queue.\n"
-    "**⏹️ Stop** — stop playback and clear the queue.\n"
-    "**🔊 Volume** — adjust the stream volume.\n"
-    "**📜 Queue** — see what's playing and what's up next.\n"
-    "**🔁 Loop** — repeat the current track.\n\n"
-    "**Commands (work too):**\n"
-    "`/start` `/help` `/play <song>` `/vplay <song>` `/pause` `/resume` `/skip` `/stop` `/queue` `/volume 80` `/loop`\n\n"
-    "**Permissions:** only admins control the player. Everyone can queue songs."
+    "📜 **Help Center — Aura Music**\n\n"
+    "**🎧 How to play music**\n"
+    "1. Add me to a **group**.\n"
+    "2. Open the group's **voice chat**.\n"
+    "3. Tap **🎵 Play Music** and send a song name, YouTube link, or audio file.\n\n"
+    "**🎬 How to play videos**\n"
+    "Same, but tap **🎬 Play Video** — streams the video in the voice chat.\n\n"
+    "**💾 Saved Library**\n"
+    "Every track played is auto-saved. Tap **💾 Saved** to replay anything anytime.\n\n"
+    "**🎮 Player controls (group admins only)**\n"
+    "▸ ⏸️ Pause / ▶️ Resume / ⏭️ Skip / ⏹️ Stop\n"
+    "▸ 🔊 Volume — tap and use the slider buttons\n"
+    "▸ 🔁 Loop — repeat the current track\n"
+    "▸ 📜 Queue — see what's playing & remove tracks (admin)\n\n"
+    "**📨 Song requests (members)**\n"
+    "Members can send `/request <song name>` — a group admin gets notified and\n"
+    "**approves** it, then it plays. Admins: see pending with `/requests`.\n\n"
+    "**⌨️ Commands**\n"
+    "`/start` `/help` `/play <song>` `/vplay <song>` `/pause` `/resume`\n"
+    "`/skip` `/stop` `/queue` `/volume 80` `/loop` `/request <song>` `/requests`\n\n"
+    "**👑 Admin access**\n"
+    "Player controls + request approval = **group admins** (and bot admins).\n"
+    "The **Admin Panel** button (👑) appears for admins in the menu.\n\n"
+    "**🔒 Owner area**\n"
+    "The owner sees a special **🔒 Owner Secret** button with hidden commands.\n\n"
+    "**Need help?** Contact: {support}"
 )
 
 STATS_TMPL = (
@@ -75,12 +97,25 @@ def register(app: Client) -> None:
         if user and await guard.can_use_bot(ctx.DB, user.id):
             await ctx.DB.add_user(user.id, user.username or "", user.first_name or "")
         admin = bool(user and await guard.is_admin(ctx.DB, user.id))
-        txt = WELCOME.format(name=config.BOT_NAME, support=config.SUPPORT_CHAT or "—")
-        await _with_logo(message.reply_photo, txt, kb.main_menu(admin))
+        owner = bool(user and guard.is_owner(user.id))
+        # "Aura knows me as its owner" — special greeting for the owner
+        if owner:
+            txt = WELCOME_OWNER.format(
+                name=config.BOT_NAME,
+                first=user.first_name or "Owner",
+                support=config.SUPPORT_CHAT or "—",
+            )
+        else:
+            txt = WELCOME.format(name=config.BOT_NAME, support=config.SUPPORT_CHAT or "—")
+        await _with_logo(message.reply_photo, txt, kb.main_menu(admin, is_owner=owner))
 
     @app.on_message(filters.command("help", prefixes=["/", "!"]))
     async def help_cmd(client: Client, message: Message):
-        await _with_logo(message.reply_photo, HELP, kb.back_to_main())
+        await _with_logo(
+            message.reply_photo,
+            HELP.format(support=config.SUPPORT_CHAT or "—"),
+            kb.back_to_main(),
+        )
 
     @app.on_message(filters.command("stats", prefixes=["/", "!"]))
     async def stats_cmd(client: Client, message: Message):
@@ -91,6 +126,11 @@ def register(app: Client) -> None:
     @rate_limited
     async def main_menu_cb(client: Client, cb: CallbackQuery):
         user = cb.from_user
+        # SOFT-SHUTDOWN GATE — owner keeps full access
+        from handlers.requests import is_bot_offline
+        if user and is_bot_offline() and not guard.is_owner(user.id):
+            await cb.answer("🛑 Aura is offline. 😴", show_alert=True)
+            return
         if not await guard.can_use_bot(ctx.DB, user.id):
             await cb.answer("🚫 You are banned.", show_alert=True)
             return
@@ -151,7 +191,15 @@ def register(app: Client) -> None:
         if action == "back":
             await cb.answer()
             admin = await guard.is_admin(ctx.DB, user.id)
-            await safe_edit(cb.message, WELCOME.format(name=config.BOT_NAME), kb.main_menu(admin))
+            owner = guard.is_owner(user.id)
+            if owner:
+                await safe_edit(
+                    cb.message,
+                    WELCOME_OWNER.format(name=config.BOT_NAME, first=user.first_name or "Owner"),
+                    kb.main_menu(admin, is_owner=True),
+                )
+            else:
+                await safe_edit(cb.message, WELCOME.format(name=config.BOT_NAME), kb.main_menu(admin))
             return
 
         if action == "close":
