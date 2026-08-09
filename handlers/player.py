@@ -50,9 +50,32 @@ def register(app: Client) -> None:
             return
         req = ctx.pending.pop(user.id)
         if not req:
-            # no ctx.pending request — but still register the user
-            await ctx.DB.add_user(user.id, user.username or "", user.first_name or "")
-            return
+            # no pending button request — BUT a direct Telegram audio/video file
+            # sent to the bot still counts as an implicit play request
+            has_media = bool(
+                message.audio
+                or message.video
+                or (
+                    message.document
+                    and message.document.mime_type
+                    and message.document.mime_type.startswith(("audio/", "video/"))
+                )
+            )
+            if not (has_media and message.media):
+                # plain text with no pending flow → just register the user
+                await ctx.DB.add_user(user.id, user.username or "", user.first_name or "")
+                return
+            req = {
+                "action": "play_video"
+                if message.video is not None
+                or (
+                    message.document
+                    and message.document.mime_type
+                    and message.document.mime_type.startswith("video/")
+                )
+                else "play_music",
+                "data": {"chat_id": message.chat.id},
+            }
         action = req["action"]
         target_chat = req["data"].get("chat_id") or message.chat.id
 
@@ -62,7 +85,12 @@ def register(app: Client) -> None:
 
         # a Telegram media file?
         has_media = bool(
-            message.audio or message.video or (message.document and message.document.mime_type)
+            message.audio or message.video
+            or (
+                message.document
+                and message.document.mime_type
+                and message.document.mime_type.startswith(("audio/", "video/"))
+            )
         )
         if has_media and message.media:
             query = "file"
