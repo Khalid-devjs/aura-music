@@ -42,11 +42,15 @@ def _ydl_opts(is_video: bool, client: str | None = None) -> dict:
         "no_warnings": True,
         "nocheckcertificate": True,
         "geo_bypass": True,
-        "merge_output_format": "mp4" if is_video else "mp3",
+        "merge_output_format": "mp4" if is_video else "m4a",
+        # NO post-processing for audio: the original m4a/opus/webm plays
+        # directly and skips the ffmpeg re-encode step (big startup speedup).
+        # ffmpeg/ffprobe are only used by yt-dlp for merging/thumbnail, which
+        # is cheap.
         "postprocessors": (
-            [{"key": "FFmpegExtractAudio", "preferredcodec": "mp3", "preferredquality": "128"}]
+            []
             if not is_video
-            else []
+            else [{"key": "FFmpegVideoConvertor", "preferedformat": "mp4"}]
         ),
         "max_filesize": config.MAX_TRACK_SIZE_MB * 1024 * 1024,
         # deno JS runtime + remote EJS challenge-solver script are REQUIRED for

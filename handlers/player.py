@@ -136,6 +136,11 @@ def register(app: Client) -> None:
         except Exception:
             status = None
 
+        # SPEED: start the voice chat NOW (in parallel with the download) so
+        # by the time the track is ready the call is already up. Saves the
+        # 2.5s+ propagation wait from the play path.
+        call_task = asyncio.create_task(_prestart_call(target_chat))
+
         try:
             track = await downloader.resolve_track(app, message, query, is_video=is_video)
         except Exception as e:
@@ -144,7 +149,9 @@ def register(app: Client) -> None:
                 await safe_edit(status, txt, kb.back_to_main())
             else:
                 await message.reply(txt)
+            call_task.cancel()
             return
+        await call_task
 
         # enqueue & play
         added = await _enqueue(target_chat, track, app, status, message)
@@ -189,13 +196,17 @@ def register(app: Client) -> None:
             )
             return
         status = await message.reply(PROCESSING)
+        # SPEED: start the call while the track downloads
+        call_task = asyncio.create_task(_prestart_call(message.chat.id))
         try:
             track = await downloader.resolve_track(
                 app, message, parts[1], is_video=parts[0].lower().startswith("/vplay")
             )
         except Exception as e:
             await safe_edit(status, f"❌ **Could not load media.**\n\n`{truncate(str(e), 200)}`")
+            call_task.cancel()
             return
+        await call_task
         await _enqueue(message.chat.id, track, app, status, message)
         await ctx.DB.bump_stat("video_plays" if track.is_video else "total_plays")
 
@@ -639,6 +650,18 @@ async def _chat_notice(chat_id: int, txt: str, status: Message | None):
             await ctx.BOT_APP.send_message(chat_id, txt)
     except Exception as e:
         logger.warning("chat_notice %s failed: %s", chat_id, e)
+
+
+async def _prestart_call(chat_id: int):
+    """Start/verify the group voice chat ASAP (run in parallel with downloads).
+
+    Never raises — if the call can't start here, _safe_play's own
+    _ensure_call + auto_start fallback still handle it.
+    """
+    try:
+        await ctx.STREAMER._ensure_call(chat_id)
+    except Exception as e:
+        logger.debug("prestart_call %s: %s", chat_id, e)
 
 
 def _now_playing_text(st) -> str:
