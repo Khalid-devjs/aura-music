@@ -32,6 +32,7 @@ class ChatState:
     volume: int = config.DEFAULT_VOLUME
     paused: bool = False
     playing: bool = False
+    seek_pos: int = 0                              # seconds into the current track
     player_msg = None
     playlist_pos: int = 0
 
@@ -84,12 +85,24 @@ class PlayerManager:
         with self._lock:
             st.current = track
             st.playing = track is not None
+            st.seek_pos = 0  # new track → seek position resets
 
     def set_loop(self, chat_id: int, value: bool) -> bool:
         st = self.get(chat_id)
         with self._lock:
             st.loop = value
             return st.loop
+
+    def set_seek(self, chat_id: int, pos: int) -> int:
+        st = self.get(chat_id)
+        with self._lock:
+            st.seek_pos = max(0, int(pos))
+            return st.seek_pos
+
+    def reset_seek(self, chat_id: int) -> None:
+        st = self.get(chat_id)
+        with self._lock:
+            st.seek_pos = 0
 
     def set_paused(self, chat_id: int, value: bool) -> None:
         st = self.get(chat_id)
@@ -110,6 +123,7 @@ class PlayerManager:
             st.paused = False
             st.playing = False
             st.loop = False
+            st.seek_pos = 0
 
     def state_snapshot(self, chat_id: int) -> dict:
         st = self.get(chat_id)

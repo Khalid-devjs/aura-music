@@ -53,6 +53,7 @@ def player_kb(state: dict) -> InlineKeyboardMarkup:
     loop_txt = "🔁 Loop: ON" if state.get("loop") else "🔁 Loop"
     kb = [
         _row(pause_btn, _btn("⏭️ Skip", "pl:skip")),
+        _row(_btn("⏪ -10s", "pl:seekb"), _btn("⏩ +10s", "pl:seekf")),
         _row(_btn("⏹️ Stop", "pl:stop"), _btn("🔊 Volume", "pl:vol"), _btn("📴 Leave VC", "pl:leave")),
         _row(_btn("📜 Queue", "pl:queue"), _btn(loop_txt, "pl:loop")),
         _row(_btn("💾 Saved", "main:saved")),

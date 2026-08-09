@@ -325,6 +325,63 @@ class Streamer:
             logger.debug("volume change failed: %s", e)
         return volume
 
+    async def seek(self, chat_id: int, delta: int) -> int:
+        """Seek the current track ±delta seconds.
+
+        py-tgcalls has no native seek — we re-start the same local file with
+        ffmpeg's `-ss <pos>` INPUT seek (fast, accurate on local files),
+        clamped to [0, duration]. Returns the new position in seconds.
+        """
+        st = manager.get(chat_id)
+        if not st.playing or not st.current or not st.current.file_path:
+            return -1
+        track = st.current
+        new_pos = max(0, st.seek_pos + delta)
+        if track.duration and new_pos >= track.duration:
+            new_pos = max(0, track.duration - 1)  # clamp just before the end
+        if new_pos == st.seek_pos and delta != 0:
+            return st.seek_pos
+        manager.set_seek(chat_id, new_pos)
+        # restart the same file at the offset — but only if a call is live
+        if not await self._call_active(chat_id):
+            manager.reset_seek(chat_id)
+            return -1
+        try:
+            # drop cached call then re-join fresh with the seeked stream
+            try:
+                self.pytgcalls._app._bind_client._cache.drop_cache(chat_id)
+            except Exception:
+                pass
+            try:
+                await self.pytgcalls.leave_call(chat_id, close=False)
+            except Exception:
+                pass  # GROUPCALL_FORBIDDEN = fine (nothing to leave)
+            await asyncio.sleep(2.5)  # let the old stream die
+            ss = f"-ss {int(new_pos)} " if new_pos > 0 else ""
+            await self.pytgcalls.play(
+                chat_id,
+                MediaStream(
+                    track.file_path,
+                    audio_parameters=AudioQuality.HIGH,
+                    video_parameters=VideoQuality.HD_720p
+                    if track.is_video else VideoQuality.SD_360p,
+                    ffmpeg_parameters=ss or None,
+                ),
+                GroupCallConfig(auto_start=True),
+            )
+            st = manager.get(chat_id)
+            if st.paused:
+                try:
+                    await self.pytgcalls.pause(chat_id)
+                except Exception:
+                    pass
+            logger.info("Seek in %s → %ss (%s)", chat_id, new_pos, track.title)
+            return new_pos
+        except Exception as e:
+            logger.error("seek failed in %s: %s", chat_id, e)
+            manager.reset_seek(chat_id)
+            return -1
+
     async def leave(self, chat_id: int) -> None:
         old = self._playing_file.pop(chat_id, None)
         downloader.delete_file(old)

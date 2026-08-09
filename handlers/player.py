@@ -225,6 +225,32 @@ def register(app: Client) -> None:
         val = manager.set_loop(message.chat.id, not st.loop)
         await message.reply(f"🔁 Loop is now **{'ON' if val else 'OFF'}**")
 
+    @app.on_message(filters.command(["fw", "forward"], prefixes=["/", "!"]))
+    async def fw_cmd(client: Client, message: Message):
+        """⏩ Seek forward 10 seconds in the current track."""
+        if not await _group_only(message):
+            return
+        if not await _is_controller(message):
+            return
+        new_pos = await ctx.STREAMER.seek(message.chat.id, +10)
+        if new_pos >= 0:
+            await message.reply(f"⏩ **+10s** → now at `{new_pos}s`")
+        else:
+            await message.reply("🎧 Nothing playing to seek.")
+
+    @app.on_message(filters.command(["fb", "back"], prefixes=["/", "!"]))
+    async def fb_cmd(client: Client, message: Message):
+        """⏪ Seek back 10 seconds in the current track."""
+        if not await _group_only(message):
+            return
+        if not await _is_controller(message):
+            return
+        new_pos = await ctx.STREAMER.seek(message.chat.id, -10)
+        if new_pos >= 0:
+            await message.reply(f"⏪ **-10s** → now at `{new_pos}s`")
+        else:
+            await message.reply("🎧 Nothing playing to seek.")
+
     @app.on_message(filters.command(["volume"], prefixes=["/", "!"]))
     async def volume_cmd(client: Client, message: Message):
         if not await _group_only(message):
@@ -406,6 +432,20 @@ def register(app: Client) -> None:
                 st = manager.get(chat_id)
                 val = manager.set_loop(chat_id, not st.loop)
                 await cb.answer(f"🔁 Loop {'ON' if val else 'OFF'}")
+                await _refresh_player(cb.message)
+            elif action == "seekb":
+                new_pos = await ctx.STREAMER.seek(chat_id, -10)
+                if new_pos >= 0:
+                    await cb.answer(f"⏪ -10s → {new_pos}s")
+                else:
+                    await cb.answer("🎧 Nothing playing to seek.", show_alert=True)
+                await _refresh_player(cb.message)
+            elif action == "seekf":
+                new_pos = await ctx.STREAMER.seek(chat_id, +10)
+                if new_pos >= 0:
+                    await cb.answer(f"⏩ +10s → {new_pos}s")
+                else:
+                    await cb.answer("🎧 Nothing playing to seek.", show_alert=True)
                 await _refresh_player(cb.message)
             elif action == "queue":
                 await _show_queue(cb, page=1)
@@ -608,10 +648,11 @@ def _now_playing_text(st) -> str:
     kind = "🎬" if t.is_video else "🎵"
     dur = format_duration(t.duration) if t.duration else "live/unknown"
     loop = "🔁 ON" if st.loop else "OFF"
+    pos_txt = f" · 📍 {format_duration(st.seek_pos)}" if st.seek_pos else ""
     return (
         f"{kind} **Now Playing**\n\n"
         f"**{truncate(t.title, 70)}**\n"
-        f"⏱ {dur} · 🔊 Vol {st.volume} · 🔁 {loop}\n"
+        f"⏱ {dur}{pos_txt} · 🔊 Vol {st.volume} · 🔁 {loop}\n"
         f"👤 Requested by: {t.requester_name or '—'}"
     )
 
