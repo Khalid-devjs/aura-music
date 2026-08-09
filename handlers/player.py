@@ -521,8 +521,13 @@ async def _enqueue(chat_id: int, track: Track, app, status: Message, message: Me
     txt = _now_playing_text(st)
     await safe_edit(status, txt, kb.player_kb(manager.state_snapshot(chat_id)))
 
-    # auto-delete the request message if configured
-    if config.AUTO_DELETE_MS:
+    # auto-delete the request message if configured — BUT never delete a
+    # user's actual media file (audio/video/document they sent); that would
+    # erase their file from the chat. Only text requests get auto-deleted.
+    if config.AUTO_DELETE_MS and not (
+        message.audio or message.video
+        or (message.document and message.document.mime_type)
+    ):
         asyncio.create_task(_auto_delete(message, config.AUTO_DELETE_MS))
     return 1
 
