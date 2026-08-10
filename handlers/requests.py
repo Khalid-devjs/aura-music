@@ -110,7 +110,7 @@ def register(app: Client) -> None:
         if not is_group(str(message.chat.type)):
             await message.reply("🎧 Use `/requests` in a **group**!")
             return
-        pending = await ctx.DB.pending_requests(message.chat.id)
+        pending = list(await ctx.DB.pending_requests(message.chat.id))
         if not pending:
             await message.reply("📭 **No pending requests.** All clear! ✨")
             return
@@ -123,7 +123,7 @@ def register(app: Client) -> None:
             + "\n".join(lines)
             + "\n\nTap **Approve** to play a request."
         )
-        await message.reply(txt, reply_markup=kb.request_approve_kb(0))
+        await message.reply(txt, reply_markup=kb.request_list_kb(pending))
 
     # ------------------------------------------------------------------
     # Request callbacks (approve / reject / list / status)
@@ -148,13 +148,13 @@ def register(app: Client) -> None:
             if not await _is_controller(cb, alert=False) and not guard.is_owner(user.id):
                 await cb.answer("👑 Admins only!", show_alert=True)
                 return
-            pending = await ctx.DB.pending_requests(chat_id)
+            pending = list(await ctx.DB.pending_requests(chat_id))
             if not pending:
                 await safe_edit(cb.message, "📭 **No pending requests.** All clear! ✨", kb.back_to_main())
                 await cb.answer()
                 return
             lines = [f"`{i}.` {'🎬' if r['is_video'] else '🎵'} {truncate(r['query'], 60)} — 👤 {r['requester_name']}" for i, r in enumerate(pending, 1)]
-            await safe_edit(cb.message, f"📨 **Pending Requests ({len(pending)})**\n\n" + "\n".join(lines), kb.request_approve_kb(0))
+            await safe_edit(cb.message, f"📨 **Pending Requests ({len(pending)})**\n\n" + "\n".join(lines), kb.request_list_kb(pending))
             await cb.answer()
             return
 
@@ -227,8 +227,8 @@ async def _notify_admins_of_request(chat_id: int, req_id: int, query: str, reque
         # post a small notice in the group — admins will see it there.
         await ctx.BOT_APP.send_message(
             chat_id,
-            f"👆 A **new song request** is pending — tap **📋 All Pending** to review & approve.",
-            reply_markup=kb.request_approve_kb(0),
+            f"👆 A **new song request** is pending — tap **Approve** to play it.",
+            reply_markup=kb.request_approve_kb(req_id),
         )
     except Exception:
         pass

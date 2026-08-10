@@ -258,7 +258,8 @@ def request_status_kb(req_id: int) -> InlineKeyboardMarkup:
 
 
 def request_approve_kb(req_id: int) -> InlineKeyboardMarkup:
-    """Admin approval panel for a pending song request."""
+    """Admin approval panel for ONE pending song request (used on the
+    single-request notice posted when someone requests)."""
     return InlineKeyboardMarkup(
         [
             _row(
@@ -269,3 +270,27 @@ def request_approve_kb(req_id: int) -> InlineKeyboardMarkup:
             _row(_btn("❌ Close", "main:close")),
         ]
     )
+
+
+def request_list_kb(pending: list) -> InlineKeyboardMarkup:
+    """Admin panel for the full pending list — every request gets its OWN
+    Approve/Reject row carrying the real request id."""
+    rows = []
+    for r in pending:
+        rows.append(
+            _row(
+                _btn(
+                    f"✅ #{r['id']} {truncate_label(r['query'], 18)}",
+                    f"req:approve:{r['id']}",
+                ),
+                _btn("❌", f"req:reject:{r['id']}"),
+            )
+        )
+    rows.append(_row(_btn("🔄 Refresh", "req:list")))
+    rows.append(_row(_btn("❌ Close", "main:close")))
+    return InlineKeyboardMarkup(rows)
+
+
+def truncate_label(s: str, n: int) -> str:
+    s = s.replace("\n", " ")
+    return s if len(s) <= n else s[: n - 1] + "…"
