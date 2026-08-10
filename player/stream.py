@@ -8,6 +8,7 @@ re-join on unexpected disconnect, file cleanup after each track.
 import asyncio
 import logging
 import random
+import time
 
 from pyrogram import Client
 from pyrogram.raw.functions.phone import CreateGroupCall
@@ -29,6 +30,7 @@ class Streamer:
         self.pytgcalls = PyTgCalls(app)
         self._lock = asyncio.Lock()
         self._playing_file = {}  # chat_id -> file path (for cleanup)
+        self._created_calls = {}  # chat_id -> (monotonic_time, InputGroupCall|None)
 
     # ------------------------------------------------------------------
     async def start(self) -> None:
@@ -68,6 +70,7 @@ class Streamer:
 
     async def _on_call_ended(self, chat_id: int) -> None:
         """Group call was ended (admin pressed end / streamer kicked) — cancel queue + state."""
+        self._created_calls.pop(chat_id, None)
         st = manager.get(chat_id)
         was_playing = st.playing or bool(st.queue) or st.current is not None
         old = self._playing_file.pop(chat_id, None)
@@ -141,7 +144,24 @@ class Streamer:
         is injected straight into py-tgcalls' group-call cache, because
         GetFullChannel lags 10+s behind reality — waiting for it makes the
         very next join fail GROUPCALL_INVALID.
+
+        IDEMPOTENT: tracks the last call we created per chat; if it's still
+        fresh (< 90s) we reuse it instead of creating ANOTHER call. This
+        prevents the "start → end → start" flicker when _prestart_call and
+        _safe_play both run _ensure_call for the same play.
         """
+        now = time.monotonic()
+        last = self._created_calls.get(chat_id)
+        if last and (now - last[0]) < 90:
+            # reuse the call we just created — re-inject its ID into the
+            # py-tgcalls cache so the join targets the LIVE call.
+            fresh_call = last[1]
+            if fresh_call is not None:
+                try:
+                    self.pytgcalls._app._bind_client._cache.set_cache(chat_id, fresh_call)
+                except Exception:
+                    pass
+            return True
         if await self._call_active(chat_id):
             # a call is verified live — make sure the cache holds the LIVE
             # ID (a stale cached ID from a previous session would otherwise
@@ -183,6 +203,9 @@ class Streamer:
                 self.pytgcalls._app._bind_client._cache.set_cache(chat_id, fresh_call)
             except Exception:
                 pass
+        # remember we created this call so a second _ensure_call within 90s
+        # reuses it instead of starting a fresh one (kills start/end/start)
+        self._created_calls[chat_id] = (time.monotonic(), fresh_call)
         await asyncio.sleep(2.5)  # let the call actually start
         return fresh_call is not None
 
