@@ -191,17 +191,33 @@ class Streamer:
         _safe_play both run _ensure_call for the same play.
         """
         now = time.monotonic()
+        from pyrogram.raw import functions
         last = self._created_calls.get(chat_id)
         if last and (now - last[0]) < 90:
-            # reuse the call we just created — re-inject its ID into the
-            # py-tgcalls cache so the join targets the LIVE call.
             fresh_call = last[1]
+            # VERIFY the tracked call is still joinable BEFORE reusing it —
+            # a call can die within the 90s window (discarded/closed without
+            # a ChatUpdate), and joining a dead ID fails GROUPCALL_INVALID
+            # forever (the retry loop can't break out). If dead → drop it.
             if fresh_call is not None:
                 try:
-                    self.pytgcalls._app._bind_client._cache.set_cache(chat_id, fresh_call)
+                    await self.app.invoke(
+                        functions.phone.GetGroupCall(call=fresh_call, limit=0)
+                    )
                 except Exception:
-                    pass
-            return True
+                    # dead call — forget it, we'll create a fresh one below
+                    self._created_calls.pop(chat_id, None)
+                    try:
+                        self.pytgcalls._app._bind_client._cache.drop_cache(chat_id)
+                    except Exception:
+                        pass
+                else:
+                    # live — re-inject into py-tgcalls cache and reuse
+                    try:
+                        self.pytgcalls._app._bind_client._cache.set_cache(chat_id, fresh_call)
+                    except Exception:
+                        pass
+                    return True
         if await self._call_active(chat_id):
             # a call is verified live. _call_active already probed the
             # tracked/py-tgcalls-cached call and (if we created it) it's in
