@@ -185,17 +185,27 @@ async def _resolve_ytdlp(
 
     await loop.run_in_executor(None, _download)
 
+    # Pick the FINISHED media file. yt-dlp leaves `.part` fragments behind
+    # when a download stalls or is interrupted — those are truncated and
+    # would make the stream die mid-track (and the call auto-close). Only
+    # complete files (mp4/m4a/webm/opus/mp3) qualify.
     files = sorted(
         (
             f
             for f in os.listdir(config.CACHE_DIR)
             if f.startswith(os.path.basename(outtmpl).split("%(ext)s")[0])
+            and not f.endswith(".part")
+            and not f.endswith(".ytdl")
         ),
         key=lambda f: os.path.getmtime(os.path.join(config.CACHE_DIR, f)),
         reverse=True,
     )
     if not files:
-        raise RuntimeError("Download finished but no file was found in cache.")
+        # a stale .part exists but no finished file → the download failed
+        raise RuntimeError(
+            "Download did not complete (only a partial file exists). "
+            "The source may be throttled — try again."
+        )
     file_path = os.path.join(config.CACHE_DIR, files[0])
 
     rid = requester.id if requester else requester_id

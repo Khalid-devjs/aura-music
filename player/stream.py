@@ -48,11 +48,15 @@ class Streamer:
         try:
             if isinstance(update, StreamEnded):
                 chat_id = update.chat_id
+                logger.info("UPDATE: StreamEnded in %s", chat_id)
                 await self._on_track_end(chat_id)
                 return
             if isinstance(update, ChatUpdate):
                 status = getattr(update, "status", None)
                 if status is not None:
+                    logger.info(
+                        "UPDATE: ChatUpdate in %s status=%s", update.chat_id, status
+                    )
                     # admin ended the group call / streamer kicked → cancel everything
                     if bool(status & ChatUpdate.Status.CLOSED_VOICE_CHAT) or bool(
                         status & ChatUpdate.Status.KICKED
@@ -64,12 +68,14 @@ class Streamer:
         # also try raw update types (older/newer versions vary)
         try:
             if update and hasattr(update, "chat_id") and str(update).lower().find("streamend") >= 0:
+                logger.info("UPDATE: raw stream-end in %s", update.chat_id)
                 await self._on_track_end(update.chat_id)
         except Exception:
             pass
 
     async def _on_call_ended(self, chat_id: int) -> None:
         """Group call was ended (admin pressed end / streamer kicked) — cancel queue + state."""
+        logger.info("CALL ENDED in %s — stopping queue", chat_id)
         self._created_calls.pop(chat_id, None)
         st = manager.get(chat_id)
         was_playing = st.playing or bool(st.queue) or st.current is not None
@@ -85,6 +91,7 @@ class Streamer:
                 pass
 
     async def _on_track_end(self, chat_id: int) -> None:
+        logger.info("TRACK END in %s", chat_id)
         st = manager.get(chat_id)
         if st.loop and st.current:
             # loop ON: replay the same file (do NOT delete it)
