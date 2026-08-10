@@ -118,13 +118,44 @@ class Streamer:
     async def _call_active(self, chat_id: int) -> bool:
         """True when a voice/video chat is actually RUNNING in the group.
 
-        ChatFull.call is unreliable: dead calls linger there for a while and
-        freshly created calls take 10+s to appear. So after reading the call
-        we VERIFY it with GetGroupCall — Telegram answers GROUPCALL_INVALID
-        for a discarded call, so an exception here means "not joinable".
+        Uses the call we TRACKED via _created_calls (or py-tgcalls' own
+        cache) and probes it with phone.GetGroupCall — this avoids
+        GetFullChannel/GetFullChat entirely, whose responses use TL
+        constructors that pyrogram 2.0.106 (2023 schema) can't parse
+        against Telegram's 2026 server ("unknown constructor" → desync →
+        Request timed out).
+
+        Priority:
+          1. a call we created recently (in _created_calls) — probe it
+          2. a call py-tgcalls cached — probe it
+          3. fall back to GetFullChannel ONLY as a last resort, and any
+             parse failure is treated as "call active" (safer: we then
+             reuse/join instead of creating a duplicate).
         """
+        from pyrogram.raw import functions
+        from pyrogram.raw.types import InputGroupCall
+
+        # 1. tracked call from our own CreateGroupCall
+        last = self._created_calls.get(chat_id)
+        if last and last[1] is not None:
+            try:
+                await self.app.invoke(functions.phone.GetGroupCall(call=last[1], limit=0))
+                return True
+            except Exception:
+                pass  # GROUPCALL_INVALID → dead, fall through
+        # 2. py-tgcalls cached call
         try:
-            from pyrogram.raw import functions
+            cached = self.pytgcalls._app._bind_client._cache.get_cache(chat_id)
+            if cached is not None:
+                try:
+                    await self.app.invoke(functions.phone.GetGroupCall(call=cached, limit=0))
+                    return True
+                except Exception:
+                    pass
+        except Exception:
+            pass
+        # 3. last resort: ChatFull probe; parse failure ⇒ assume active
+        try:
             from pyrogram.raw.types import InputPeerChannel, InputPeerChat
 
             peer = await self.app.resolve_peer(chat_id)
@@ -141,7 +172,9 @@ class Streamer:
             await self.app.invoke(functions.phone.GetGroupCall(call=call, limit=0))
             return True
         except Exception:
-            return False
+            # unknown constructor / any parse failure — cannot tell for
+            # sure; assume a call may exist so we don't duplicate it.
+            return True
 
     async def _ensure_call(self, chat_id: int) -> bool:
         """Create the group voice chat if none is active (auto-start call).
@@ -170,24 +203,10 @@ class Streamer:
                     pass
             return True
         if await self._call_active(chat_id):
-            # a call is verified live — make sure the cache holds the LIVE
-            # ID (a stale cached ID from a previous session would otherwise
-            # make the join fail GROUPCALL_INVALID)
-            try:
-                from pyrogram.raw import functions
-                from pyrogram.raw.types import InputPeerChannel
-
-                peer = await self.app.resolve_peer(chat_id)
-                if isinstance(peer, InputPeerChannel):
-                    full = await self.app.invoke(functions.channels.GetFullChannel(channel=peer))
-                    call = getattr(full, "call", None)
-                    if call is not None:
-                        self.pytgcalls._app._bind_client._cache.set_cache(
-                            chat_id,
-                            InputGroupCall(id=call.id, access_hash=call.access_hash),
-                        )
-            except Exception:
-                pass
+            # a call is verified live. _call_active already probed the
+            # tracked/py-tgcalls-cached call and (if we created it) it's in
+            # _created_calls → the cache is current. No GetFullChannel here:
+            # its responses can't be parsed with the 2023 pyrogram schema.
             return True
         result = await self.app.invoke(
             CreateGroupCall(
