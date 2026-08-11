@@ -28,7 +28,7 @@ from pyrogram import Client
 
 import config
 from database.db import Database
-from handlers import admin, owner, player, requests, settings, start, owner_secret
+from handlers import admin, cookies, owner, player, requests, settings, start, owner_secret
 from handlers.context import set_context
 from modules.logger import setup_logging
 from player.downloader import cleanup_cache
@@ -76,6 +76,7 @@ async def main() -> None:
     owner.register(bot)
     requests.register(bot)
     owner_secret.register(bot)
+    cookies.register(bot)
 
     log.info("Starting clients…")
     await user.start()

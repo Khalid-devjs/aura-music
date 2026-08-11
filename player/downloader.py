@@ -53,14 +53,27 @@ def _ydl_opts(is_video: bool, client: str | None = None) -> dict:
             else [{"key": "FFmpegVideoConvertor", "preferedformat": "mp4"}]
         ),
         "max_filesize": config.MAX_TRACK_SIZE_MB * 1024 * 1024,
-        # deno JS runtime + remote EJS challenge-solver script are REQUIRED for
-        # YouTube signature/n solving (2026+). Without them most formats come
-        # back without URLs -> "Requested format is not available".
-        "remote_components": {"ejs:github"},
+        # PO token (Proof-of-Origin) defeats YouTube's "Sign in to confirm
+        # you're not a bot" / "The page needs to be reloaded" blocks from
+        # datacenter IPs (2026+). The bgutil HTTP provider (local Deno server
+        # on :4416, see /tmp/bgutil-ytdlp-pot-provider) mints tokens via
+        # Botguard; the provider PLUGIN is installed in site-packages
+        # (yt_dlp_plugins/extractor/getpot_bgutil_http.py) so yt-dlp finds it.
+        # Config format: po_token=<client>+<provider> (provider = bgutil:http).
+        "extractor_args": {
+            "youtube": [
+                "player_client=web",
+                "po_token=web+bgutil:http",
+            ]
+        },
     }
     # Alternate player clients dodge datacenter bot-checks; cookies fix hard blocks.
-    if client and client != "default":
-        opts["extractor_args"] = {"youtube": [f"player_client={client}"]}
+    if client and client != "default" and client != "web":
+        # MERGE with the po_token config — replacing would drop the token.
+        existing = opts.get("extractor_args", {}).get("youtube", [])
+        opts["extractor_args"] = {
+            "youtube": [*existing, f"player_client={client}"]
+        }
     if config.COOKIES_FILE:
         opts["cookiefile"] = config.COOKIES_FILE
     return opts
@@ -118,10 +131,57 @@ def _search_terms(query: str) -> str:
     return f"ytsearch1:{query}"
 
 
+_LAST_YT_SEARCH_FALLBACK = 0.0
+
+
+def _yt_search_fallback(query: str) -> str:
+    """Search YouTube via a web search engine when the YouTube search
+    endpoint is bot-blocked from this IP. Returns a direct watch URL
+    (which yt-dlp can always resolve with the PO token)."""
+    global _LAST_YT_SEARCH_FALLBACK
+    import urllib.parse
+    import urllib.request
+
+    now = time.monotonic()
+    if now - _LAST_YT_SEARCH_FALLBACK < 2.0:
+        raise RuntimeError("Search throttled — try again in a moment.")
+    _LAST_YT_SEARCH_FALLBACK = now
+
+    engines = [
+        ("https://search.brave.com/search?q={q}", "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"),
+        ("https://html.duckduckgo.com/html/?q={q}", "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"),
+    ]
+    last_err: Exception | None = None
+    for tmpl, ua in engines:
+        try:
+            q = urllib.parse.quote(f"site:youtube.com {query}")
+            req = urllib.request.Request(
+                tmpl.format(q=q),
+                headers={"User-Agent": ua},
+            )
+            html = urllib.request.urlopen(req, timeout=15).read().decode("utf-8", "ignore")
+            m = re.search(r"youtube\.com/watch\?v=([A-Za-z0-9_-]{11})", html)
+            if m:
+                return f"https://www.youtube.com/watch?v={m.group(1)}"
+        except Exception as e:  # noqa: BLE001 — try next engine
+            last_err = e
+            continue
+    raise RuntimeError(f"No YouTube results found for that search. ({last_err})")
+
+
 def extract_info(url_or_query: str) -> dict:
-    """Fetch metadata for a URL or search query (sync, run in executor)."""
+    """Fetch metadata for a URL or search query (sync, run in executor).
+    Falls back to DDG search if the YouTube search endpoint is bot-blocked."""
     query = _search_terms(url_or_query)
-    info = _run_ydl(query, is_video=False, download=False)
+    try:
+        info = _run_ydl(query, is_video=False, download=False)
+    except Exception as e:
+        # only fall back for a bot-block; real errors surface directly
+        if not _is_bot_block(e):
+            raise
+        direct = _yt_search_fallback(url_or_query)
+        logger.warning("YouTube search blocked (%s) — DDG fallback → %s", str(e)[:60], direct)
+        info = _run_ydl(direct, is_video=False, download=False)
     if "entries" in info:
         info = info["entries"][0]
     return info
@@ -186,8 +246,13 @@ async def _resolve_ytdlp(
         config.CACHE_DIR, f"{int(time.time())}_{_sanitize(title)[:30]}.%(ext)s"
     )
 
+    # Download the RESOLVED URL (not the raw search query) — if extract_info
+    # fell back to DDG search, the direct watch URL is the only thing that
+    # downloads reliably from this IP.
+    dl_target = info.get("webpage_url") or query
+
     def _download():
-        return _run_ydl(query, is_video, download=True, outtmpl=outtmpl)
+        return _run_ydl(dl_target, is_video, download=True, outtmpl=outtmpl)
 
     await loop.run_in_executor(None, _download)
 

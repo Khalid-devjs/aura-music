@@ -20,16 +20,14 @@ def _btn(text: str, data: str) -> InlineKeyboardButton:
 # Main menu
 # --------------------------------------------------------------------------
 def main_menu(is_admin: bool = False, is_owner: bool = False) -> InlineKeyboardMarkup:
+    # NOTE (2026-08-11, user-mandated): NO admin/owner buttons in the main
+    # menu — "buttons are too much looks weird". Admin tools are command-only
+    # (/admin, /cookies, etc.).
     kb = [
         _row(_btn("🎵 Play Music", "main:music"), _btn("🎬 Play Video", "main:video")),
         _row(_btn("📜 Help", "main:help"), _btn("⚙️ Settings", "main:settings")),
         _row(_btn("📊 Bot Stats", "main:stats"), _btn("💾 Saved", "main:saved"), _btn("👨‍💻 Developer", "main:dev")),
     ]
-    if is_admin:
-        kb.append(_row(_btn("👑 Admin Panel", "main:admin")))
-    if is_owner:
-        # 🔒 secret owner button — only the owner ever sees this
-        kb.append(_row(_btn("🔒 Owner Secret", "owsec:panel")))
     kb.append(_row(_btn("❌ Close", "main:close")))
     return InlineKeyboardMarkup(kb)
 
