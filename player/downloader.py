@@ -24,7 +24,7 @@ def _sanitize(name: str) -> str:
     return "".join(c for c in name if c.isalnum() or c in " ._-")[:60].strip()
 
 
-CLIENT_FALLBACKS = ["web", "tv", "android", "ios", "mweb"]
+CLIENT_FALLBACKS = ["web_safari", "android", "ios", "web", "tv", "mweb", "tv_simply", "web_embedded", "android_vr"]
 
 
 def _ydl_opts(is_video: bool, client: str | None = None) -> dict:
@@ -68,7 +68,13 @@ def _ydl_opts(is_video: bool, client: str | None = None) -> dict:
 
 def _is_bot_block(err) -> bool:
     msg = str(err).lower()
-    return "sign in to confirm" in msg or "not a bot" in msg or "bot check" in msg
+    return (
+        "sign in to confirm" in msg
+        or "not a bot" in msg
+        or "bot check" in msg
+        or "page needs to be reloaded" in msg
+        or "requested format is not available" in msg
+    )
 
 
 def _run_ydl(query: str, is_video: bool, download: bool, outtmpl: str | None = None) -> dict:
