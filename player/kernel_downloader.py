@@ -184,6 +184,12 @@ def download_via_vm(url: str, out_prefix: str = "kernel") -> str:
     deadline = time.time() + 15
     while time.time() < deadline:
         if os.path.exists(dest) and os.path.getsize(dest) > 0:
-            return dest
+            # move into the cache dir so normal cleanup picks it up
+            final = os.path.join(config.CACHE_DIR, f"{int(time.time())}_{job}.mp3")
+            try:
+                os.replace(dest, final)
+            except OSError:
+                final = dest
+            return final
         time.sleep(0.5)
     raise RuntimeError("Kernel download: file did not arrive in drop dir.")

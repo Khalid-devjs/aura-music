@@ -205,6 +205,32 @@ def extract_info(url_or_query: str) -> dict:
     is_search = query.startswith("ytsearch")
 
     if is_search:
+        # When the Kernel VM is configured, prefer it for search: the VM's
+        # clean IP returns results instantly, while Invidious may burn
+        # seconds across failing instances. Local/Invidious still works as
+        # fallback if the VM is unreachable.
+        kernel_ok = False
+        try:
+            from player import kernel_downloader
+
+            if kernel_downloader._is_configured():
+                raw_q = re.sub(r"^ytsearch\d*:", "", url_or_query).strip()
+                vm_results = kernel_downloader.search_youtube_vm(raw_q, limit=8)
+                if vm_results:
+                    r = vm_results[0]
+                    logger.info("Kernel VM search → %s (%s)", r["title"][:40], r["videoId"])
+                    return {
+                        "id": r["videoId"],
+                        "title": r["title"],
+                        "duration": r["duration"],
+                        "webpage_url": r["url"],
+                        "thumbnail": f"https://i.ytimg.com/vi/{r['videoId']}/hqdefault.jpg",
+                        "channel": r["author"],
+                    }
+                kernel_ok = True
+        except Exception as ve:  # noqa: BLE001 — VM is best-effort
+            logger.warning("Kernel VM search failed: %s", str(ve)[:80])
+
         # 1) Invidious search (fast, IP-free)
         try:
             results = _yt_search_results(url_or_query, limit=8)
@@ -226,27 +252,12 @@ def extract_info(url_or_query: str) -> dict:
                 logger.warning("Invidious result %s blocked/unavailable — trying next…", direct[-11:])
                 continue
 
-        # 2) All Invidious results blocked → Kernel cloud VM search (clean IP)
-        try:
-            from player import kernel_downloader
-
-            if kernel_downloader._is_configured():
-                vm_results = kernel_downloader.search_youtube_vm(url_or_query, limit=8)
-                for r in vm_results:
-                    direct = r["url"]
-                    try:
-                        info = _run_ydl(direct, is_video=False, download=False)
-                        if "entries" in info:
-                            info = info["entries"][0]
-                        return info
-                    except Exception as e:  # noqa: BLE001 — try next result
-                        last_err = e
-                        if not (_is_bot_block(e) or _is_unavailable(e)):
-                            raise
-                        logger.warning("VM result %s blocked — trying next…", direct[-11:])
-                        continue
-        except Exception as ve:  # noqa: BLE001 — VM is best-effort
-            logger.warning("Kernel VM search failed: %s", str(ve)[:80])
+        if kernel_ok:
+            # VM search ran but returned nothing usable.
+            raise RuntimeError(
+                "No YouTube results found for that search. "
+                "Try a different track or check the search spelling."
+            ) from last_err
 
         raise RuntimeError(
             "YouTube blocked every search result from this IP. "
@@ -339,14 +350,39 @@ async def _resolve_ytdlp(
     last_err: Exception | None = None
 
     # If the kernel VM fallback is configured and the server IP is known to
-    # be flagged, skip straight to it after ONE quick local attempt.
+    # be flagged, download straight through the VM (clean IP) — local
+    # attempts just burn client rotations before failing.
     kernel_ready = False
+    kernel_downloader = None
     try:
         from player import kernel_downloader
 
         kernel_ready = kernel_downloader._is_configured()
     except Exception:  # noqa: BLE001
         kernel_ready = False
+
+    if kernel_ready and kernel_downloader is not None:
+        vm_dest = await loop.run_in_executor(
+            None,
+            kernel_downloader.download_via_vm,
+            candidates[0],
+        )
+        if vm_dest and os.path.exists(vm_dest):
+            logger.info("Kernel VM download succeeded → %s", vm_dest)
+            rid = requester.id if requester else requester_id
+            rname = (requester.first_name or "") if requester else requester_name
+            return Track(
+                title=title,
+                duration=duration,
+                file_path=vm_dest,
+                source=query,
+                requester_id=rid,
+                requester_name=rname,
+                is_video=is_video,
+                thumbnail=info.get("thumbnail", ""),
+                stream_url=info.get("webpage_url", ""),
+            )
+        logger.warning("Kernel VM download returned no file — falling back to local…")
 
     for i, dl_target in enumerate(candidates):
         def _download():
