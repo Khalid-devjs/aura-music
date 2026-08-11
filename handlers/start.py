@@ -121,6 +121,18 @@ def register(app: Client) -> None:
     async def stats_cmd(client: Client, message: Message):
         await _send_stats(message)
 
+    # /admin — command-only admin panel (buttons removed from main menu,
+    # user-mandated 2026-08-11: "buttons are too much looks weird").
+    @app.on_message(filters.command("admin", prefixes=["/", "!"]) & filters.private)
+    async def admin_cmd(client: Client, message: Message):
+        user = message.from_user
+        if not user:
+            return
+        if not await guard.is_admin(ctx.DB, user.id):
+            await message.reply_text("🚫 *Access denied.* You are not authorized to use this command.")
+            return
+        await message.reply_text("👑 **Admin Panel**", reply_markup=kb.admin_menu())
+
     # ------------------------------------------------------------------
     @app.on_callback_query(filters.regex(r"^main:"))
     @rate_limited
