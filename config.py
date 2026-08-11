@@ -49,6 +49,14 @@ YT_CLIENT: str = os.getenv("YT_CLIENT", "web")
 # "Sign in to confirm you're not a bot" when even tv/android clients are blocked.
 COOKIES_FILE: str = os.getenv("COOKIES_FILE", "").strip()
 
+# ---------- Kernel cloud downloader (clean-IP fallback) ----------
+# When YouTube bot-blocks this server's IP, downloads can be routed through
+# a Kernel cloud browser VM (clean datacenter IP). The VM runs yt-dlp,
+# downloads the audio, then POSTs the file back through the SSH reverse
+# tunnel to the local file-drop server. See README "Kernel fallback".
+KERNEL_DROP_DIR: str = os.getenv("KERNEL_DROP_DIR", "kernel_drop")
+KERNEL_DROP_TOKEN: str = os.getenv("KERNEL_DROP_TOKEN", "").strip()
+
 # ---------- Behaviour ----------
 AUTO_DELETE_MS: int = _int("AUTO_DELETE_MS", 30000)  # delete old bot msgs after N ms (0 = off)
 LOG_CHANNEL_ID: int = _int("LOG_CHANNEL_ID", 0)      # 0 = disabled

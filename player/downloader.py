@@ -104,6 +104,20 @@ def _is_bot_block(err) -> bool:
         or "bot check" in msg
         or "page needs to be reloaded" in msg
         or "requested format is not available" in msg
+        or "http error 403" in msg  # video-level flag: 403 on stream fetch
+    )
+
+
+def _is_unavailable(err: Exception) -> bool:
+    """Videos that YouTube reports as unavailable/unplayable — retryable by
+    trying a different search candidate, not a real error."""
+    msg = str(err).lower()
+    return (
+        "video unavailable" in msg
+        or "this video is not available" in msg
+        or "unavailable" in msg and "format" not in msg
+        or "not available in your country" in msg
+        or "isn't available" in msg
     )
 
 
@@ -120,6 +134,8 @@ def _run_ydl(query: str, is_video: bool, download: bool, outtmpl: str | None = N
     last_err: Exception | None = None
     # Bot-checks are probabilistic: repeat the WHOLE client rotation a few
     # times. Each rotation = a fresh chance (~17%/attempt → ~80% over 9).
+    # Direct URL downloads don't triple-rotate: the candidate retry loop in
+    # _resolve_ytdlp already tries other videos, so one rotation is enough.
     for rotation in range(3 if is_search else 1):
         for client in clients:
             try:
@@ -158,70 +174,88 @@ def _search_terms(query: str) -> str:
     return f"ytsearch1:{query}"
 
 
-_LAST_YT_SEARCH_FALLBACK = 0.0
-
-
 def _yt_search_fallback(query: str) -> str:
-    """Search YouTube via a web search engine when the YouTube search
+    """Search YouTube via public Invidious instances when the YouTube search
     endpoint is bot-blocked from this IP. Returns a direct watch URL
     (which yt-dlp can always resolve with the PO token)."""
-    global _LAST_YT_SEARCH_FALLBACK
-    import urllib.parse
-    import urllib.request
+    from player import search_provider
 
-    now = time.monotonic()
-    if now - _LAST_YT_SEARCH_FALLBACK < 2.0:
-        raise RuntimeError("Search throttled — try again in a moment.")
-    _LAST_YT_SEARCH_FALLBACK = now
+    results = search_provider.search_youtube(query, limit=3)
+    return results[0]["url"]
 
-    engines = [
-        ("https://search.brave.com/search?q={q}", "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"),
-        ("https://html.duckduckgo.com/html/?q={q}", "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"),
-    ]
-    last_err: Exception | None = None
-    for tmpl, ua in engines:
-        try:
-            q = urllib.parse.quote(f"site:youtube.com {query}")
-            req = urllib.request.Request(
-                tmpl.format(q=q),
-                headers={"User-Agent": ua},
-            )
-            html = urllib.request.urlopen(req, timeout=15).read().decode("utf-8", "ignore")
-            m = re.search(r"youtube\.com/watch\?v=([A-Za-z0-9_-]{11})", html)
-            if m:
-                return f"https://www.youtube.com/watch?v={m.group(1)}"
-        except Exception as e:  # noqa: BLE001 — try next engine
-            last_err = e
-            continue
-    raise RuntimeError(f"No YouTube results found for that search. ({last_err})")
+
+def _yt_search_results(query: str, limit: int = 8) -> list[dict]:
+    """Return search results with titles/durations via Invidious fallback."""
+    from player import search_provider
+
+    return search_provider.search_youtube(query, limit=limit)
 
 
 def extract_info(url_or_query: str) -> dict:
     """Fetch metadata for a URL or search query (sync, run in executor).
-    Retries a few times (YouTube bot-checks are probabilistic per request),
-    then falls back to web-engine search → direct URL."""
+
+    Strategy (2026-08: YouTube bot-blocks this server's IP for SEARCH):
+      - Plain search  → Invidious API first (IP-free, ~2s), then resolve the
+        returned watch URL via yt-dlp. This avoids the slow yt-dlp search
+        rotations that burn 60s+ and then fail anyway.
+      - Direct URL    → yt-dlp with PO tokens + client rotation (works for
+        most videos; some are flagged even on clean IPs).
+    """
     query = _search_terms(url_or_query)
     is_search = query.startswith("ytsearch")
 
-    attempts = 3 if is_search else 1
-    last_err: Exception | None = None
-    for attempt in range(attempts):
+    if is_search:
+        # 1) Invidious search (fast, IP-free)
         try:
-            info = _run_ydl(query, is_video=False, download=False)
-            if "entries" in info:
-                info = info["entries"][0]
-            return info
-        except Exception as e:  # noqa: BLE001 — retry logic
-            last_err = e
-            if not _is_bot_block(e):
-                raise
-            logger.warning("YouTube search bot-check (attempt %d/%d): %s", attempt + 1, attempts, str(e)[:60])
-            time.sleep(1.0 * (attempt + 1))  # backoff between retries
+            results = _yt_search_results(url_or_query, limit=8)
+        except Exception as se:  # noqa: BLE001
+            logger.warning("Invidious search failed: %s", str(se)[:60])
+            results = []
+        last_err: Exception | None = None
+        for r in results:
+            direct = r["url"]
+            try:
+                info = _run_ydl(direct, is_video=False, download=False)
+                if "entries" in info:
+                    info = info["entries"][0]
+                return info
+            except Exception as e:  # noqa: BLE001 — try next result
+                last_err = e
+                if not (_is_bot_block(e) or _is_unavailable(e)):
+                    raise
+                logger.warning("Invidious result %s blocked/unavailable — trying next…", direct[-11:])
+                continue
 
-    # all retries bot-blocked → try web-engine search → direct watch URL
-    direct = _yt_search_fallback(url_or_query)
-    logger.warning("Search endpoint blocked — web-engine fallback → %s", direct)
-    info = _run_ydl(direct, is_video=False, download=False)
+        # 2) All Invidious results blocked → Kernel cloud VM search (clean IP)
+        try:
+            from player import kernel_downloader
+
+            if kernel_downloader._is_configured():
+                vm_results = kernel_downloader.search_youtube_vm(url_or_query, limit=8)
+                for r in vm_results:
+                    direct = r["url"]
+                    try:
+                        info = _run_ydl(direct, is_video=False, download=False)
+                        if "entries" in info:
+                            info = info["entries"][0]
+                        return info
+                    except Exception as e:  # noqa: BLE001 — try next result
+                        last_err = e
+                        if not (_is_bot_block(e) or _is_unavailable(e)):
+                            raise
+                        logger.warning("VM result %s blocked — trying next…", direct[-11:])
+                        continue
+        except Exception as ve:  # noqa: BLE001 — VM is best-effort
+            logger.warning("Kernel VM search failed: %s", str(ve)[:80])
+
+        raise RuntimeError(
+            "YouTube blocked every search result from this IP. "
+            "Try a different track, or set COOKIES_FILE to a cookies.txt from a "
+            "logged-in browser (see README)."
+        ) from last_err
+
+    # Direct URL: yt-dlp with PO tokens + client rotation
+    info = _run_ydl(query, is_video=False, download=False)
     if "entries" in info:
         info = info["entries"][0]
     return info
@@ -275,6 +309,7 @@ async def _resolve_ytdlp(
 ) -> Track:
     """Shared yt-dlp path used by both resolve_track (new plays) and resolve_url (replays)."""
     query = _search_terms(query)  # wrap plain searches so BOTH extract & download work
+    is_search = query.startswith("ytsearch")
     loop = asyncio.get_running_loop()
     info = await loop.run_in_executor(None, extract_info, query)
     title = info.get("title") or info.get("id") or "Unknown"
@@ -286,15 +321,121 @@ async def _resolve_ytdlp(
         config.CACHE_DIR, f"{int(time.time())}_{_sanitize(title)[:30]}.%(ext)s"
     )
 
-    # Download the RESOLVED URL (not the raw search query) — if extract_info
-    # fell back to DDG search, the direct watch URL is the only thing that
-    # downloads reliably from this IP.
-    dl_target = info.get("webpage_url") or query
+    # Download the RESOLVED URL (not the raw search query). If the video
+    # itself is flagged (some videos bot-block even on a clean IP), fall
+    # back to more Invidious search results and try each in turn.
+    candidates = [info.get("webpage_url") or query]
+    if is_search:
+        raw_query = re.sub(r"^ytsearch\d*:", "", query)
+        try:
+            candidates += [r["url"] for r in _yt_search_results(raw_query, limit=8)]
+        except Exception:  # noqa: BLE001 — search fallback is best-effort
+            pass
+    # de-dupe while keeping order
+    seen: set[str] = set()
+    candidates = [u for u in candidates if not (u in seen or seen.add(u))]
 
-    def _download():
-        return _run_ydl(dl_target, is_video, download=True, outtmpl=outtmpl)
+    downloaded: dict | None = None
+    last_err: Exception | None = None
 
-    await loop.run_in_executor(None, _download)
+    # If the kernel VM fallback is configured and the server IP is known to
+    # be flagged, skip straight to it after ONE quick local attempt.
+    kernel_ready = False
+    try:
+        from player import kernel_downloader
+
+        kernel_ready = kernel_downloader._is_configured()
+    except Exception:  # noqa: BLE001
+        kernel_ready = False
+
+    for i, dl_target in enumerate(candidates):
+        def _download():
+            return _run_ydl(dl_target, is_video, download=True, outtmpl=outtmpl)
+
+        try:
+            downloaded = await loop.run_in_executor(None, _download)
+            break
+        except Exception as e:  # noqa: BLE001 — try next candidate
+            last_err = e
+            if not (_is_bot_block(e) or _is_unavailable(e)):
+                raise
+            logger.warning("Candidate %s failed (%s) — trying next…", dl_target[-30:], str(e)[:40])
+            # clean partial files before retrying with the next candidate
+            for f in os.listdir(config.CACHE_DIR):
+                if f.startswith(os.path.basename(outtmpl).split("%(ext)s")[0]) and f.endswith(".part"):
+                    try:
+                        os.remove(os.path.join(config.CACHE_DIR, f))
+                    except OSError:
+                        pass
+            # Fast path: if the FIRST local candidate bot-blocked and the
+            # kernel VM is configured, skip the remaining local candidates
+            # (they will almost certainly fail too) and go straight to the VM.
+            if i == 0 and kernel_ready and _is_bot_block(last_err):
+                logger.info("Local download bot-blocked — switching to Kernel VM…")
+                break
+    if downloaded is None:
+        # All local candidates failed with bot-block/unavailable → try the
+        # Kernel cloud VM (clean IP) if it's configured.
+        if last_err is None:
+            last_err = RuntimeError("Download failed: no candidates were tried.")
+        if _is_bot_block(last_err):
+            dest = ""
+            try:
+                from player import kernel_downloader
+
+                vm_path = await loop.run_in_executor(
+                    None,
+                    kernel_downloader.download_via_vm,
+                    candidates[0],
+                )
+                if vm_path and os.path.exists(vm_path):
+                    # move into the cache dir so the normal file-scan below works
+                    dest = os.path.join(
+                        config.CACHE_DIR,
+                        f"{int(time.time())}_{_sanitize(title)[:30]}.mp3",
+                    )
+                    if dest != vm_path:
+                        try:
+                            os.replace(vm_path, dest)
+                        except OSError:
+                            os.rename(vm_path, dest)
+                            dest = vm_path
+                    file_path = dest
+                    # scan finds it below; use the already-known title/duration
+                    files = [os.path.basename(file_path)]
+                    downloaded = {"_vm": True}
+                    logger.info("Kernel VM download succeeded → %s", file_path)
+            except Exception as ke:  # noqa: BLE001 — kernel is best-effort
+                logger.warning("Kernel VM download failed: %s", str(ke)[:80])
+                raise last_err from ke
+        if downloaded is None:
+            raise last_err
+
+    if downloaded and isinstance(downloaded, dict) and downloaded.get("_vm"):
+        # Kernel VM fallback: file already placed at `dest`.
+        vm_dest = locals().get("dest", "")
+        if not vm_dest or not os.path.exists(vm_dest):
+            raise RuntimeError("Kernel VM download: file missing after transfer.")
+        rid = requester.id if requester else requester_id
+        rname = (requester.first_name or "") if requester else requester_name
+        return Track(
+            title=title,
+            duration=duration,
+            file_path=vm_dest,
+            source=query,
+            requester_id=rid,
+            requester_name=rname,
+            is_video=is_video,
+            thumbnail=info.get("thumbnail", ""),
+            stream_url=info.get("webpage_url", ""),
+        )
+
+    # If a fallback candidate downloaded (not the first pick), use ITS
+    # metadata so the title/duration/thumbnail shown match the audio.
+    if isinstance(downloaded, dict):
+        title = downloaded.get("title") or title
+        duration = int(downloaded.get("duration") or duration)
+        info = downloaded
 
     # Pick the FINISHED media file. yt-dlp leaves `.part` fragments behind
     # when a download stalls or is interrupted — those are truncated and
