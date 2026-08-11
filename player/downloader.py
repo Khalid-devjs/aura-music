@@ -96,24 +96,34 @@ def _run_ydl(query: str, is_video: bool, download: bool, outtmpl: str | None = N
     """
     Extract/download with automatic client rotation.
     Rotates player clients only on YouTube bot-checks; real errors surface directly.
+    Searches repeat the full rotation 3x (bot-checks are probabilistic).
     """
+    is_search = query.startswith("ytsearch")
     clients = [config.YT_CLIENT] if config.YT_CLIENT and config.YT_CLIENT != "default" else []
     clients += [c for c in CLIENT_FALLBACKS if c not in clients]
 
     last_err: Exception | None = None
-    for client in clients:
-        try:
-            opts = _ydl_opts(is_video, client)
-            if outtmpl:
-                opts["outtmpl"] = outtmpl
-            with yt_dlp.YoutubeDL(opts) as ydl:
-                info = ydl.extract_info(query, download=download)
-                return info
-        except Exception as e:  # noqa: BLE001 — rotation logic
-            last_err = e
-            if not _is_bot_block(e):
-                break
-            logger.warning("YouTube bot-check hit with client %s — rotating…", client)
+    # Bot-checks are probabilistic: repeat the WHOLE client rotation a few
+    # times. Each rotation = a fresh chance (~17%/attempt → ~80% over 9).
+    for rotation in range(3 if is_search else 1):
+        for client in clients:
+            try:
+                opts = _ydl_opts(is_video, client)
+                if outtmpl:
+                    opts["outtmpl"] = outtmpl
+                with yt_dlp.YoutubeDL(opts) as ydl:
+                    info = ydl.extract_info(query, download=download)
+                    return info
+            except Exception as e:  # noqa: BLE001 — rotation logic
+                last_err = e
+                if not _is_bot_block(e):
+                    raise
+                logger.warning(
+                    "YouTube bot-check with client %s (rotation %d/3) — rotating…",
+                    client, rotation + 1,
+                )
+        if is_search and last_err and _is_bot_block(last_err):
+            time.sleep(2.0)  # brief pause between full rotations
 
     if last_err and _is_bot_block(last_err):
         raise RuntimeError(
