@@ -60,15 +60,17 @@ def _ydl_opts(is_video: bool, client: str | None = None) -> dict:
         # Botguard; the provider PLUGIN is installed in site-packages
         # (yt_dlp_plugins/extractor/getpot_bgutil_http.py) so yt-dlp finds it.
         # Config format: po_token=<client>+<provider> (provider = bgutil:http).
+        # Verified 2026-08-11: web_safari + PO token works; COOKIES actually
+        # BREAK it from a datacenter IP ("The page needs to be reloaded").
         "extractor_args": {
             "youtube": [
-                "player_client=web",
+                "player_client=web_safari",
                 "po_token=web+bgutil:http",
             ]
         },
     }
     # Alternate player clients dodge datacenter bot-checks; cookies fix hard blocks.
-    if client and client != "default" and client != "web":
+    if client and client != "default" and client != "web" and client != "web_safari":
         # MERGE with the po_token config — replacing would drop the token.
         existing = opts.get("extractor_args", {}).get("youtube", [])
         opts["extractor_args"] = {
@@ -171,17 +173,30 @@ def _yt_search_fallback(query: str) -> str:
 
 def extract_info(url_or_query: str) -> dict:
     """Fetch metadata for a URL or search query (sync, run in executor).
-    Falls back to DDG search if the YouTube search endpoint is bot-blocked."""
+    Retries a few times (YouTube bot-checks are probabilistic per request),
+    then falls back to web-engine search → direct URL."""
     query = _search_terms(url_or_query)
-    try:
-        info = _run_ydl(query, is_video=False, download=False)
-    except Exception as e:
-        # only fall back for a bot-block; real errors surface directly
-        if not _is_bot_block(e):
-            raise
-        direct = _yt_search_fallback(url_or_query)
-        logger.warning("YouTube search blocked (%s) — DDG fallback → %s", str(e)[:60], direct)
-        info = _run_ydl(direct, is_video=False, download=False)
+    is_search = query.startswith("ytsearch")
+
+    attempts = 3 if is_search else 1
+    last_err: Exception | None = None
+    for attempt in range(attempts):
+        try:
+            info = _run_ydl(query, is_video=False, download=False)
+            if "entries" in info:
+                info = info["entries"][0]
+            return info
+        except Exception as e:  # noqa: BLE001 — retry logic
+            last_err = e
+            if not _is_bot_block(e):
+                raise
+            logger.warning("YouTube search bot-check (attempt %d/%d): %s", attempt + 1, attempts, str(e)[:60])
+            time.sleep(1.0 * (attempt + 1))  # backoff between retries
+
+    # all retries bot-blocked → try web-engine search → direct watch URL
+    direct = _yt_search_fallback(url_or_query)
+    logger.warning("Search endpoint blocked — web-engine fallback → %s", direct)
+    info = _run_ydl(direct, is_video=False, download=False)
     if "entries" in info:
         info = info["entries"][0]
     return info

@@ -44,7 +44,7 @@ DEFAULT_VOLUME: int = max(0, min(200, _int("DEFAULT_VOLUME", 100)))
 MAX_TRACK_SIZE_MB: int = _int("MAX_TRACK_SIZE_MB", 512)
 CACHE_CLEANUP_OLDER_THAN_H: int = _int("CACHE_CLEANUP_OLDER_THAN_H", 24)
 # YouTube extractor: 'tv' client dodges datacenter bot-checks; 'default' uses stock yt-dlp.
-YT_CLIENT: str = os.getenv("YT_CLIENT", "web")
+YT_CLIENT: str = os.getenv("YT_CLIENT", "web_safari")
 # Optional cookies.txt (Netscape format) exported from your browser — fixes
 # "Sign in to confirm you're not a bot" when even tv/android clients are blocked.
 COOKIES_FILE: str = os.getenv("COOKIES_FILE", "").strip()
