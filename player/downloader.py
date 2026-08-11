@@ -12,12 +12,21 @@ import time
 import logging
 
 import yt_dlp
+from yt_dlp.plugins import load_all_plugins
 from pyrogram.types import Message
 
 import config
 from player.manager import Track
 
 logger = logging.getLogger("auramusic")
+
+# CRITICAL: ensure yt-dlp's external plugins (bgutil PO-token provider) are
+# loaded. yt-dlp lazy-loads plugins on first YoutubeDL() use, but the bot
+# imports THIS module before any YoutubeDL exists — and the PO-token provider
+# must be registered before the YouTube extractor builds its token director.
+# Without this, the plugin registry stays empty and NO PO tokens are minted
+# (verified: provider list empty when downloader imported first).
+load_all_plugins()
 
 
 def _sanitize(name: str) -> str:
@@ -59,12 +68,12 @@ def _ydl_opts(is_video: bool, client: str | None = None) -> dict:
         # on :4416, see /tmp/bgutil-ytdlp-pot-provider) mints tokens via
         # Botguard; the provider PLUGIN is installed in site-packages
         # (yt_dlp_plugins/extractor/getpot_bgutil_http.py) so yt-dlp finds it.
-        # Config format: po_token=<client>+<provider> (provider = bgutil:http).
-        # Verified 2026-08-11: web_safari + PO token works; COOKIES actually
-        # BREAK it from a datacenter IP ("The page needs to be reloaded").
+        # CRITICAL: the po_token CLIENT must match the player_client exactly
+        # (yt-dlp skips a token whose client != active player_client), and the
+        # plugin loads only via load_all_plugins() at module import.
         "extractor_args": {
             "youtube": [
-                "player_client=web_safari",
+                "player_client=web",
                 "po_token=web+bgutil:http",
             ]
         },
