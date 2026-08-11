@@ -366,6 +366,7 @@ async def _resolve_ytdlp(
             None,
             kernel_downloader.download_via_vm,
             candidates[0],
+            is_video,
         )
         if vm_dest and os.path.exists(vm_dest):
             logger.info("Kernel VM download succeeded → %s", vm_dest)
@@ -423,12 +424,14 @@ async def _resolve_ytdlp(
                     None,
                     kernel_downloader.download_via_vm,
                     candidates[0],
+                    is_video,
                 )
                 if vm_path and os.path.exists(vm_path):
                     # move into the cache dir so the normal file-scan below works
+                    _ext = os.path.splitext(vm_path)[1] or (".mp4" if is_video else ".mp3")
                     dest = os.path.join(
                         config.CACHE_DIR,
-                        f"{int(time.time())}_{_sanitize(title)[:30]}.mp3",
+                        f"{int(time.time())}_{_sanitize(title)[:30]}{_ext}",
                     )
                     if dest != vm_path:
                         try:

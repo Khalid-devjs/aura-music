@@ -140,11 +140,12 @@ def search_youtube_vm(query: str, limit: int = 8) -> list[dict]:
     return results
 
 
-def download_via_vm(url: str, out_prefix: str = "kernel") -> str:
-    """Download audio via the Kernel VM and return the local file path.
+def download_via_vm(url: str, is_video: bool = False, out_prefix: str = "kernel") -> str:
+    """Download via the Kernel VM and return the local file path.
 
-    Returns the path of the received file in KERNEL_DROP_DIR.
-    Raises RuntimeError on failure.
+    is_video=True  → mp4 video (best ≤720p), no conversion
+    is_video=False → mp3 audio (bestaudio converted)
+    Returns the path of the received file. Raises RuntimeError on failure.
     """
     global _job_counter
     if not _is_configured():
@@ -153,24 +154,44 @@ def download_via_vm(url: str, out_prefix: str = "kernel") -> str:
     job = f"k{int(time.time())}_{_job_counter}"
     outtmpl = f"/tmp/{job}.%(ext)s"
 
-    # 1) download + convert to mp3 in the VM
-    _exec_vm([
-        "/tmp/yt-dlp", "-f", "bestaudio/best", "-x", "--audio-format", "mp3",
-        "-o", outtmpl, "--no-warnings", "--quiet", url,
-    ], timeout=180)
+    if is_video:
+        # best mp4 video (video+audio merged by yt-dlp), cap at 720p
+        cmd = [
+            "/tmp/yt-dlp", "-f",
+            "bestvideo[height<=720]+bestaudio/best[height<=720]/best[height<=720]",
+            "--merge-output-format", "mp4",
+            "-o", outtmpl, "--no-warnings", "--quiet", url,
+        ]
+    else:
+        # audio: download + convert to mp3
+        cmd = [
+            "/tmp/yt-dlp", "-f", "bestaudio/best", "-x", "--audio-format", "mp3",
+            "-o", outtmpl, "--no-warnings", "--quiet", url,
+        ]
 
-    # 2) find the produced mp3
+    # 1) download (+ convert) in the VM
+    _exec_vm(cmd, timeout=180)
+
+    # 2) find the produced file (mp3 for audio, mp4 for video)
     listing = _exec_vm(["ls", "-1", "/tmp"], timeout=20)
+    wanted_ext = "mp3" if not is_video else "mp4"
     fname = None
     for f in listing.splitlines():
-        if f.startswith(job) and f.endswith(".mp3"):
+        if f.startswith(job) and f.endswith(f".{wanted_ext}"):
             fname = f
             break
     if not fname:
-        raise RuntimeError(f"Kernel VM download produced no mp3 for {url}")
+        # video may have merged to a different container — accept any of ours
+        if is_video:
+            for f in listing.splitlines():
+                if f.startswith(job) and f.endswith((".mp4", ".mkv", ".webm")):
+                    fname = f
+                    break
+    if not fname:
+        raise RuntimeError(f"Kernel VM download produced no {wanted_ext} for {url}")
 
     # 3) POST it through the tunnel to the local file-drop server
-    drop_name = f"{job}.mp3"
+    drop_name = f"{job}.{fname.rsplit('.', 1)[-1]}"
     _exec_vm([
         "curl", "-s", "-X", "POST",
         "-H", f"X-Drop-Token: {_DROP_TOKEN}",
@@ -185,7 +206,8 @@ def download_via_vm(url: str, out_prefix: str = "kernel") -> str:
     while time.time() < deadline:
         if os.path.exists(dest) and os.path.getsize(dest) > 0:
             # move into the cache dir so normal cleanup picks it up
-            final = os.path.join(config.CACHE_DIR, f"{int(time.time())}_{job}.mp3")
+            _ext = os.path.splitext(dest)[1] or (".mp4" if is_video else ".mp3")
+            final = os.path.join(config.CACHE_DIR, f"{int(time.time())}_{job}{_ext}")
             try:
                 os.replace(dest, final)
             except OSError:
