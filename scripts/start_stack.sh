@@ -1,19 +1,10 @@
 #!/bin/bash
-# Aura Music full-stack launcher — starts every component of the
-# clean-IP download infrastructure in order. Safe to re-run (idempotent).
-#
-# Components:
-#   1. POT server       (Deno, :4416) — mints PO tokens for local yt-dlp
-#   2. File-drop server (Python, :9090) — receives mp3s from the Kernel VM
-#   3. Kernel tunnel    (kernel browsers ssh -R) — VM -> localhost bridge
-#   4. Music bot        (venv python main.py)
-#
-# Usage: bash scripts/start_stack.sh   (env vars come from /root/musicbot/.env)
+# Aura Music watchdog — keeps the full stack alive. Run via:
+#   nohup bash scripts/start_stack.sh --watchdog > logs/watchdog.log 2>&1 &
+# Every 15s it checks each component and restarts anything that died.
 
-set -e
 cd "$(dirname "$0")/.."
 
-# Load .env for KERNEL_SESSION_ID / KERNEL_DROP_TOKEN / MCP_KERNEL_API_KEY
 set -a
 # shellcheck disable=SC1091
 source .env 2>/dev/null || true
@@ -21,47 +12,49 @@ set +a
 
 is_running() { pgrep -f "$1" >/dev/null 2>&1; }
 
-# 1) POT server
-if is_running "deno run --allow-all src/main.ts -p 4416"; then
-  echo "[stack] POT server already running"
-else
-  echo "[stack] starting POT server…"
+start_pot() {
+  if is_running "deno run --allow-all src/main.ts -p 4416"; then return 0; fi
+  echo "[$(date +%T)] starting POT server"
   (cd /tmp/bgutil-ytdlp-pot-provider/server && nohup /root/.deno/bin/deno run --allow-all src/main.ts -p 4416 > /tmp/pot-server.log 2>&1 &)
-  sleep 2
-fi
+}
 
-# 2) File-drop server
-if is_running "file_drop_server.py"; then
-  echo "[stack] file-drop server already running"
-else
-  echo "[stack] starting file-drop server…"
+start_filedrop() {
+  if is_running "file_drop_server.py"; then return 0; fi
+  echo "[$(date +%T)] starting file-drop server"
   KERNEL_DROP_TOKEN="${KERNEL_DROP_TOKEN:?KERNEL_DROP_TOKEN not set}" \
     nohup venv/bin/python file_drop_server.py 9090 > logs/file_drop.log 2>&1 &
-  sleep 1
-fi
+}
 
-# 3) Kernel tunnel (only if KEY + session configured)
-if [ -n "${KERNEL_SESSION_ID:-}" ]; then
-  if is_running "kernel browsers ssh ${KERNEL_SESSION_ID}"; then
-    echo "[stack] kernel tunnel already running"
-  else
-    echo "[stack] starting kernel tunnel…"
-    export KERNEL_API_KEY
-    (sleep 86400 | nohup kernel browsers ssh "$KERNEL_SESSION_ID" \
-      -R 4416:127.0.0.1:4416 -R 9090:127.0.0.1:9090 > logs/kernel_tunnel.log 2>&1 &)
-    sleep 6
-  fi
+start_tunnel() {
+  [ -n "${KERNEL_SESSION_ID:-}" ] || return 0
+  if is_running "kernel browsers ssh ${KERNEL_SESSION_ID}"; then return 0; fi
+  echo "[$(date +%T)] starting kernel tunnel"
+  export KERNEL_API_KEY
+  (sleep 86400 | nohup kernel browsers ssh "$KERNEL_SESSION_ID" \
+    -R 4416:127.0.0.1:4416 -R 9090:127.0.0.1:9090 > logs/kernel_tunnel.log 2>&1 &)
+}
+
+start_bot() {
+  if is_running "venv/bin/python main.py"; then return 0; fi
+  echo "[$(date +%T)] starting bot"
+  nohup venv/bin/python main.py >> logs/musicbot.log 2>&1 &
+}
+
+start_all() {
+  start_pot
+  start_filedrop
+  start_tunnel
+  start_bot
+}
+
+if [ "${1:-}" = "--watchdog" ]; then
+  echo "[$(date +%T)] watchdog started"
+  while true; do
+    start_all
+    sleep 15
+  done
 else
-  echo "[stack] KERNEL_SESSION_ID not set — skipping tunnel"
+  start_all
+  echo "[stack] started. Components:"
+  pgrep -af "deno run --allow-all src/main.ts|file_drop_server|kernel browsers ssh|venv/bin/python main.py" | grep -v grep || true
 fi
-
-# 4) Bot
-if is_running "venv/bin/python main.py"; then
-  echo "[stack] bot already running"
-else
-  echo "[stack] starting bot…"
-  nohup venv/bin/python main.py > logs/musicbot.log 2>&1 &
-fi
-
-echo "[stack] done. Components:"
-pgrep -af "deno run --allow-all src/main.ts|file_drop_server|kernel browsers ssh|venv/bin/python main.py" | grep -v grep || true

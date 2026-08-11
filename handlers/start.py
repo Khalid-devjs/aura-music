@@ -123,7 +123,8 @@ def register(app: Client) -> None:
 
     # /admin — command-only admin panel (buttons removed from main menu,
     # user-mandated 2026-08-11: "buttons are too much looks weird").
-    @app.on_message(filters.command("admin", prefixes=["/", "!"]) & filters.private)
+    # Works in private chats AND groups (admin-gated either way).
+    @app.on_message(filters.command("admin", prefixes=["/", "!"]))
     async def admin_cmd(client: Client, message: Message):
         user = message.from_user
         if not user:

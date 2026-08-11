@@ -1,0 +1,22 @@
+[Unit]
+Description=Aura Music Bot (Pyrogram + PyTgCalls)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/root/musicbot
+EnvironmentFile=/root/musicbot/.env
+ExecStart=/root/musicbot/venv/bin/python /root/musicbot/main.py
+Restart=always
+RestartSec=5
+KillMode=mixed
+TimeoutStopSec=20
+NoNewPrivileges=true
+ProtectSystem=full
+ReadWritePaths=/root/musicbot /tmp
+StandardOutput=append:/root/musicbot/logs/musicbot.log
+StandardError=append:/root/musicbot/logs/musicbot.log
+
+[Install]
+WantedBy=multi-user.target
