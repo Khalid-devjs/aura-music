@@ -68,13 +68,19 @@ def _ydl_opts(is_video: bool, client: str | None = None) -> dict:
         # on :4416, see /tmp/bgutil-ytdlp-pot-provider) mints tokens via
         # Botguard; the provider PLUGIN is installed in site-packages
         # (yt_dlp_plugins/extractor/getpot_bgutil_http.py) so yt-dlp finds it.
-        # CRITICAL: the po_token CLIENT must match the player_client exactly
-        # (yt-dlp skips a token whose client != active player_client), and the
-        # plugin loads only via load_all_plugins() at module import.
+        # CRITICAL (verified 2026-08-11):
+        #  - load_all_plugins() at module import (yt-dlp lazy-loads plugins,
+        #    bot's import order left the provider registry EMPTY otherwise)
+        #  - po_token CLIENT must match player_client exactly (yt-dlp skips
+        #    mismatched tokens)
+        #  - BOTH contexts required: web.gvs (search) + web.player (video
+        #    data/streaming). Missing .player → "HTTP Error 403: Forbidden"
+        #    on download.
         "extractor_args": {
             "youtube": [
                 "player_client=web",
-                "po_token=web+bgutil:http",
+                "po_token=web.gvs+bgutil:http",
+                "po_token=web.player+bgutil:http",
             ]
         },
     }
