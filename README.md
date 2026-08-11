@@ -142,3 +142,47 @@ Commands also work: `/play <song>`, `/vplay <song>`, `/pause`, `/resume`,
 ## 📜 License
 
 For personal/community use. Respect content creators' rights and platform ToS.
+
+---
+
+## 🧠 YouTube bot-block workaround (2026)
+
+If your server's IP gets flagged by YouTube ("Sign in to confirm you're not
+a bot"), the bot uses a two-tier IP-free fallback:
+
+### Tier 1 — Invidious search (automatic, zero setup)
+- Searches go through public Invidious API instances first (~2s) instead of
+  YouTube's flagged search endpoint. Direct video URLs still resolve with
+  PO tokens (see below).
+
+### Tier 2 — Kernel cloud VM downloads (clean IP)
+When downloads also bot-block from the server IP, the bot routes them
+through a Kernel cloud browser VM (kernel.sh) whose datacenter IP is not
+flagged. The VM runs yt-dlp, converts to mp3, and POSTs the file back
+through an SSH reverse tunnel to a local file-drop server.
+
+**Setup (one-time):**
+1. `npm install -g @onkernel/cli websocat` and `kernel login` (or export `KERNEL_API_KEY`).
+2. Create a session with both tunnels:
+   ```
+   kernel browsers create --headless --remote-forward 4416:127.0.0.1:4416,9090:127.0.0.1:9090
+   kernel browsers ssh <SESSION_ID> -R 4416:127.0.0.1:4416 -R 9090:127.0.0.1:9090
+   ```
+3. In the VM: `curl -L -o /tmp/yt-dlp https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp && chmod +x /tmp/yt-dlp`
+4. In `.env`:
+   ```
+   MCP_KERNEL_API_KEY=<your kernel api key>
+   KERNEL_SESSION_ID=<session id>
+   KERNEL_DROP_TOKEN=<random secret>
+   ```
+5. Start the file-drop server + full stack: `bash scripts/start_stack.sh`
+
+**Why it works:** the VM's IP is clean, so yt-dlp there downloads without
+PO tokens or cookies. The reverse tunnel (`-R 9090`) lets the VM reach the
+bot server's file-drop receiver privately — no public exposure.
+
+### PO tokens (local downloads)
+The bot still tries local yt-dlp + PO tokens first (minted by a local
+Botguard POT server on :4416). Both `web.gvs` (search) and `web.player`
+(video data) contexts are required. Local downloads work when the IP is
+not currently rate-limited; the Kernel fallback catches the flagged state.
