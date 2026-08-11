@@ -29,7 +29,11 @@ start_tunnel() {
   [ -n "${KERNEL_SESSION_ID:-}" ] || return 0
   if is_running "kernel browsers ssh ${KERNEL_SESSION_ID}"; then return 0; fi
   echo "[$(date +%T)] starting kernel tunnel"
-  export KERNEL_API_KEY
+  # kernel CLI reads KERNEL_API_KEY; the MCP key is stored as MCP_KERNEL_API_KEY
+  export KERNEL_API_KEY="${KERNEL_API_KEY:-${MCP_KERNEL_API_KEY:-}}"
+  if [ -z "$KERNEL_API_KEY" ]; then
+    echo "[$(date +%T)] WARNING: no KERNEL_API_KEY — tunnel will fail auth"
+  fi
   (sleep 86400 | nohup kernel browsers ssh "$KERNEL_SESSION_ID" \
     -R 4416:127.0.0.1:4416 -R 9090:127.0.0.1:9090 > logs/kernel_tunnel.log 2>&1 &)
 }
