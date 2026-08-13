@@ -81,6 +81,8 @@ def _exec_vm(args: list[str], timeout: int = 90) -> str:
     """Run a command in the Kernel VM; returns stdout."""
     if not _API_KEY or not KERNEL_SESSION_ID:
         raise RuntimeError("Kernel downloader not configured (KERNEL_SESSION_ID / MCP_KERNEL_API_KEY).")
+    # Kernel's exec_command caps timeout_sec at 150 — clamp to avoid RPC rejection.
+    timeout = min(int(timeout), 140)
     result = _rpc("tools/call", {
         "name": "exec_command",
         "arguments": {
