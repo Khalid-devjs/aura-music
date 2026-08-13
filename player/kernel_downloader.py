@@ -171,25 +171,32 @@ def download_via_vm(url: str, is_video: bool = False, out_prefix: str = "kernel"
             "-o", outtmpl, "--no-warnings", "--quiet", url,
         ]
 
-    # 1) download (+ convert) in the VM
-    _exec_vm(cmd, timeout=180)
-
-    # 2) find the produced file (mp3 for audio, mp4 for video)
-    listing = _exec_vm(["ls", "-1", "/tmp"], timeout=20)
-    wanted_ext = "mp3" if not is_video else "mp4"
+    # 1) download (+ convert) in the VM — retry a couple times (VM/yt-dlp can stall)
+    produced = False
     fname = None
-    for f in listing.splitlines():
-        if f.startswith(job) and f.endswith(f".{wanted_ext}"):
-            fname = f
-            break
-    if not fname:
-        # video may have merged to a different container — accept any of ours
-        if is_video:
+    for attempt in range(1, 4):
+        try:
+            _exec_vm(cmd, timeout=140)
+        except Exception as e:  # RPC/exec hiccup — retry
+            logger.warning("Kernel download attempt %d failed: %s", attempt, e)
+        listing = _exec_vm(["ls", "-1", "/tmp"], timeout=20)
+        wanted_ext = "mp3" if not is_video else "mp4"
+        fname = None
+        for f in listing.splitlines():
+            if f.startswith(job) and f.endswith(f".{wanted_ext}"):
+                fname = f
+                break
+        if not fname and is_video:
             for f in listing.splitlines():
                 if f.startswith(job) and f.endswith((".mp4", ".mkv", ".webm")):
                     fname = f
                     break
-    if not fname:
+        if fname:
+            produced = True
+            break
+        time.sleep(2)
+
+    if not produced:
         raise RuntimeError(f"Kernel VM download produced no {wanted_ext} for {url}")
 
     # 3) POST it through the tunnel to the local file-drop server
