@@ -3,6 +3,7 @@ Shared runtime context + pending multi-step input registry.
 """
 import time
 
+import config
 from pyrogram import Client
 
 from database.db import Database
@@ -18,6 +19,27 @@ START_TIME: float = time.time()
 def set_context(bot: Client, user: Client, db: Database, streamer: Streamer) -> None:
     global BOT_APP, USER_APP, DB, STREAMER
     BOT_APP, USER_APP, DB, STREAMER = bot, user, db, streamer
+
+
+async def reload_streamer(session_string: str) -> None:
+    global USER_APP, STREAMER
+    old_user = USER_APP
+    old_streamer = STREAMER
+    if old_user and getattr(old_user, "is_connected", False):
+        try:
+            await old_user.stop()
+        except Exception:
+            pass
+    USER_APP = Client(
+        getattr(old_user, "name", "auramusic_user"),
+        api_id=config.API_ID,
+        api_hash=config.API_HASH,
+        session_string=session_string,
+        workers=8,
+    )
+    STREAMER = Streamer(USER_APP)
+    await USER_APP.start()
+    await STREAMER.start()
 
 
 class Pending:
