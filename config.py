@@ -68,8 +68,6 @@ def validate() -> None:
         missing.append("API_HASH")
     if not BOT_TOKEN:
         missing.append("BOT_TOKEN")
-    if not SESSION_STRING:
-        missing.append("SESSION_STRING")
     if not OWNER_ID:
         missing.append("OWNER_ID")
     if missing:

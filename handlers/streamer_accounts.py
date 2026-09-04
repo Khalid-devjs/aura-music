@@ -1,14 +1,11 @@
 """
-Owner-only account factory: create a new Telegram USER account session from
-inline credentials and persist it.
+Owner-only streamer account creation with explicit pending state.
 
 Commands:
-  /createsession   -> ask for API_ID
-  /setapihash     -> ask for API_HASH
-  /setphone       -> ask for phone number
-  /setcode        -> ask for Telegram login code
-  /set2fa         -> optional 2FA password if enabled
+  /createsession   start owner-only account creation
 """
+from __future__ import annotations
+
 import asyncio
 import os
 import time
@@ -37,170 +34,121 @@ def _write_session(path: Path, session_string: str) -> None:
     path.write_text(session_string, encoding="utf-8")
 
 
-def register(app) -> None:
+_STEP = {
+    "API_ID": "Send your **API_ID** (numeric).",
+    "API_HASH": "Send your **API_HASH**.",
+    "PHONE": "Send the **phone number** in international format, e.g. `+2348012345678`.",
+    "CODE": "Send the **login code** you received on Telegram.",
+    "2FA": "🔐 Two-step verification is enabled. Send your **password**.",
+}
+
+
+def register(app: Client) -> None:
     @app.on_message(filters.command("createsession"), group=3)
     @rate_limited
     async def _start(client: Client, message: Message):
         user = message.from_user
-        if not guard.is_owner(user.id):
+        if not user or not guard.is_owner(user.id):
             await send_or_edit(message, "🔒 Owner only.")
+            return
+        if not config.API_ID or not config.API_HASH or not config.BOT_TOKEN:
+            await send_or_edit(message, "❌ Bot API credentials missing in config.")
             return
         ctx.pending.set(
             user.id,
-            "createsession_api_id",
-            data={"step": "api_id", "started_at": int(time.time())},
+            "createsession",
+            data={"step": "API_ID", "started_at": int(time.time())},
         )
-        await send_or_edit(message, "🧾 **Create Streamer Session**\n\nStep 1: Send your **API_ID** (numeric).")
+        await send_or_edit(message, "🧾 **Create Streamer Session**\n\n" + _STEP["API_ID"])
 
     @app.on_message(filters.private, group=4)
     async def _step(client: Client, message: Message):
         user = message.from_user
-        if not guard.is_owner(user.id) or not message.text:
+        if not user or not message.text:
+            return
+        if not guard.is_owner(user.id):
             return
         req = ctx.pending.pop(user.id)
-        if not req:
+        if not req or req.get("action") != "createsession":
             return
-        action = req.get("action")
         data = req.get("data") or {}
+        step = data.get("step")
         text = message.text.strip()
-
-        if action != "createsession_api_id":
-            return
         try:
-            api_id = int(text)
-        except ValueError:
-            await send_or_edit(message, "❌ API_ID must be numeric. Try `/createsession` again.")
-            return
-        ctx.pending.set(
-            user.id,
-            "createsession_api_hash",
-            data={"api_id": api_id, "step": "api_hash", "started_at": int(time.time())},
-        )
-        await send_or_edit(message, "Step 2: Send your **API_HASH**.")
-
-        @app.on_message(filters.private, group=4)
-        async def _api_hash(client: Client, message: Message):
-            user2 = message.from_user
-            if not guard.is_owner(user2.id) or not message.text:
-                return
-            req2 = ctx.pending.pop(user2.id)
-            if not req2 or req2.get("action") != "createsession_api_hash":
-                return
-            api_id = req2["data"]["api_id"]
-            api_hash = message.text.strip()
-            ctx.pending.set(
-                user2.id,
-                "createsession_phone",
-                data={"api_id": api_id, "api_hash": api_hash, "step": "phone", "started_at": int(time.time())},
-            )
-            await send_or_edit(message, "Step 3: Send the **phone number** in international format, e.g. `+2348012345678`.")
-
-            @app.on_message(filters.private, group=4)
-            async def _phone(client: Client, message: Message):
-                user3 = message.from_user
-                if not guard.is_owner(user3.id) or not message.text:
-                    return
-                req3 = ctx.pending.pop(user3.id)
-                if not req3 or req3.get("action") != "createsession_phone":
-                    return
-                phone = message.text.strip().lstrip("@")
-                api_id = req3["data"]["api_id"]
-                api_hash = req3["data"]["api_hash"]
-                path = _session_path(phone)
+            if step == "API_ID":
+                api_id = int(text)
+                data["api_id"] = api_id
+                data["step"] = "API_HASH"
+                msg = await send_or_edit(message, "Step 2:\n" + _STEP["API_HASH"])
+            elif step == "API_HASH":
+                data["api_hash"] = text
+                data["step"] = "PHONE"
+                await send_or_edit(message, "Step 3:\n" + _STEP["PHONE"])
+            elif step == "PHONE":
+                phone = text.lstrip("@")
+                data["phone"] = phone
                 await send_or_edit(message, "📲 Sending login code to Telegram…")
                 try:
                     tmp_name = f"tmp_{int(time.time()*1000)}"
-                    tmp = Client(tmp_name, api_id=api_id, api_hash=api_hash, phone_number=phone)
+                    tmp = Client(tmp_name, api_id=data["api_id"], api_hash=data["api_hash"], phone_number=phone)
                     await tmp.connect()
                     sent = await tmp.send_code(phone)
                     await tmp.disconnect()
                 except Exception as e:
                     await send_or_edit(message, f"❌ Failed to send code: `{e}`")
                     return
-                ctx.pending.set(
-                    user3.id,
-                    "createsession_code",
-                    data={
-                        "api_id": api_id,
-                        "api_hash": api_hash,
-                        "phone": phone,
-                        "path": str(path),
-                        "phone_code_hash": sent.phone_code_hash,
-                        "step": "code",
-                        "started_at": int(time.time()),
-                    },
-                )
-                await send_or_edit(message, "Step 4: Send the **login code** you received on Telegram.")
-
-                @app.on_message(filters.private, group=4)
-                async def _code(client: Client, message: Message):
-                    user4 = message.from_user
-                    if not guard.is_owner(user4.id) or not message.text:
+                data["phone_code_hash"] = sent.phone_code_hash
+                data["step"] = "CODE"
+                await send_or_edit(message, "Step 4:\n" + _STEP["CODE"])
+            elif step == "CODE":
+                phone = data["phone"]
+                path = _session_path(phone)
+                try:
+                    tmp_name = f"tmp_{int(time.time()*1000)}"
+                    tmp = Client(tmp_name, api_id=data["api_id"], api_hash=data["api_hash"], phone_number=phone)
+                    await tmp.connect()
+                    signed_in = await tmp.sign_in(phone, data["phone_code_hash"], text)
+                    if isinstance(signed_in, SessionPasswordNeeded):
+                        data["step"] = "2FA"
+                        data["path"] = str(path)
+                        ctx.pending.set(user.id, "createsession", data=data)
+                        await send_or_edit(message, _STEP["2FA"])
                         return
-                    req4 = ctx.pending.pop(user4.id)
-                    if not req4 or req4.get("action") != "createsession_code":
-                        return
-                    code = message.text.strip()
-                    api_id = req4["data"]["api_id"]
-                    api_hash = req4["data"]["api_hash"]
-                    phone = req4["data"]["phone"]
-                    path = Path(req4["data"]["path"])
-                    phone_code_hash = req4["data"]["phone_code_hash"]
-                    try:
-                        tmp_name = f"tmp_{int(time.time()*1000)}"
-                        tmp = Client(tmp_name, api_id=api_id, api_hash=api_hash, phone_number=phone)
-                        await tmp.connect()
-                        signed_in = await tmp.sign_in(phone, phone_code_hash, code)
-                        if isinstance(signed_in, SessionPasswordNeeded):
-                            await send_or_edit(message, "🔐 Two-step verification is enabled. Send your **password**.")
-                            ctx.pending.set(
-                                user4.id,
-                                "createsession_2fa",
-                                data={
-                                    "api_id": api_id,
-                                    "api_hash": api_hash,
-                                    "phone": phone,
-                                    "path": str(path),
-                                    "step": "2fa",
-                                    "started_at": int(time.time()),
-                                },
-                            )
-
-                            @app.on_message(filters.private, group=4)
-                            async def _2fa(client: Client, message: Message):
-                                user5 = message.from_user
-                                if not guard.is_owner(user5.id) or not message.text:
-                                    return
-                                req5 = ctx.pending.pop(user5.id)
-                                if not req5 or req5.get("action") != "createsession_2fa":
-                                    return
-                                password = message.text.strip()
-                                api_id = req5["data"]["api_id"]
-                                api_hash = req5["data"]["api_hash"]
-                                phone = req5["data"]["phone"]
-                                path = Path(req5["data"]["path"])
-                                try:
-                                    tmp_name = f"tmp_{int(time.time()*1000)}"
-                                    tmp = Client(tmp_name, api_id=api_id, api_hash=api_hash, phone_number=phone)
-                                    await tmp.connect()
-                                    await tmp.check_password(password)
-                                    session_string = await tmp.export_session_string()
-                                    await tmp.disconnect()
-                                except Exception as e:
-                                    await send_or_edit(message, f"❌ 2FA failed: `{e}`")
-                                    return
-                                await _finalize(message, path, session_string, phone)
-                            return
-                        session_string = await tmp.export_session_string()
-                        await tmp.disconnect()
-                        await _finalize(message, path, session_string, phone)
-                    except PhoneCodeInvalid:
-                        await send_or_edit(message, "❌ Invalid code. Try `/createsession` again.")
-                    except Exception as e:
-                        await send_or_edit(message, f"❌ Login failed: `{e}`")
+                    session_string = await tmp.export_session_string()
+                    await tmp.disconnect()
+                    await _finalize(client, message, path, session_string, phone)
+                    return
+                except PhoneCodeInvalid:
+                    await send_or_edit(message, "❌ Invalid code. Try `/createsession` again.")
+                    return
+                except Exception as e:
+                    await send_or_edit(message, f"❌ Login failed: `{e}`")
+                    return
+            elif step == "2FA":
+                phone = data["phone"]
+                path = Path(data.get("path") or _session_path(phone))
+                try:
+                    tmp_name = f"tmp_{int(time.time()*1000)}"
+                    tmp = Client(tmp_name, api_id=data["api_id"], api_hash=data["api_hash"], phone_number=phone)
+                    await tmp.connect()
+                    await tmp.check_password(text)
+                    session_string = await tmp.export_session_string()
+                    await tmp.disconnect()
+                    await _finalize(client, message, path, session_string, phone)
+                    return
+                except Exception as e:
+                    await send_or_edit(message, f"❌ 2FA failed: `{e}`")
+                    return
+            else:
+                await send_or_edit(message, "❌ Unknown step. Try `/createsession` again.")
+                return
+        except Exception as e:
+            await send_or_edit(message, f"❌ Error: `{e}`")
+            return
+        ctx.pending.set(user.id, "createsession", data=data)
 
 
-async def _finalize(message: Message, path: Path, session_string: str, phone: str):
+async def _finalize(client: Client, message: Message, path: Path, session_string: str, phone: str):
     try:
         await asyncio.to_thread(_write_session, path, session_string)
         await send_or_edit(
@@ -210,5 +158,10 @@ async def _finalize(message: Message, path: Path, session_string: str, phone: st
             f"Saved: `{path}`\n\n"
             "Restarting Streamer client…",
         )
+        try:
+            await ctx.reload_streamer(session_string)
+            await send_or_edit(message, "✅ Streamer client reloaded with the new session.")
+        except Exception as e:
+            await send_or_edit(message, f"⚠️ Saved, but auto-reload failed: `{e}`\nUse `/reloadstreamer`.")
     except Exception as e:
         await send_or_edit(message, f"❌ Failed to save session: `{e}`")
