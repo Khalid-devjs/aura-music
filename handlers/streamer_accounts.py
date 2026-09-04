@@ -1,8 +1,5 @@
 """
 Owner-only streamer account creation with explicit pending state.
-
-Commands:
-  /createsession   start owner-only account creation
 """
 from __future__ import annotations
 
@@ -48,7 +45,9 @@ def register(app: Client) -> None:
     @rate_limited
     async def _start(client: Client, message: Message):
         user = message.from_user
+        print(f"CREATESESSION TRIGGERED by {user.id if user else 'None'}")
         if not user or not guard.is_owner(user.id):
+            print(f"  -> not owner: {user.id if user else 'None'} vs {config.OWNER_ID}")
             await send_or_edit(message, "🔒 Owner only.")
             return
         if not config.API_ID or not config.API_HASH or not config.BOT_TOKEN:
@@ -64,22 +63,27 @@ def register(app: Client) -> None:
     @app.on_message(filters.private, group=4)
     async def _step(client: Client, message: Message):
         user = message.from_user
+        print(f"PRIVATE MSG from {user.id if user else 'None'}: {(message.text or '')[:50]}")
         if not user or not message.text:
+            print("  -> skip: no user or no text")
             return
         if not guard.is_owner(user.id):
+            print(f"  -> skip: not owner {user.id}")
             return
         req = ctx.pending.pop(user.id)
         if not req or req.get("action") != "createsession":
+            print(f"  -> skip: no pending createsession (action={req.get('action') if req else 'None'})")
             return
         data = req.get("data") or {}
         step = data.get("step")
         text = message.text.strip()
+        print(f"  -> processing step={step}, text={text[:20]}")
         try:
             if step == "API_ID":
                 api_id = int(text)
                 data["api_id"] = api_id
                 data["step"] = "API_HASH"
-                msg = await send_or_edit(message, "Step 2:\n" + _STEP["API_HASH"])
+                await send_or_edit(message, "Step 2:\n" + _STEP["API_HASH"])
             elif step == "API_HASH":
                 data["api_hash"] = text
                 data["step"] = "PHONE"
@@ -143,6 +147,7 @@ def register(app: Client) -> None:
                 await send_or_edit(message, "❌ Unknown step. Try `/createsession` again.")
                 return
         except Exception as e:
+            print(f"  -> ERROR in step handler: {e}")
             await send_or_edit(message, f"❌ Error: `{e}`")
             return
         ctx.pending.set(user.id, "createsession", data=data)

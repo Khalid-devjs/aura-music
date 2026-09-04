@@ -279,6 +279,10 @@ def register(app: Client) -> None:
         if not req:
             return
         action = req["action"]
+        if action not in ("add_admin", "rm_admin", "ban_user", "unban_user"):
+            # not an admin flow — put it back and let other handlers handle it
+            ctx.pending.set(user.id, action, **(req.get("data") or {}))
+            return
         text = message.text.strip()
         target = await _resolve_target(app, message, text)
 

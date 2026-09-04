@@ -99,10 +99,7 @@ async def main() -> None:
         workers=8,
     )
 
-    await bot.start()
-    log.info("Bot client started")
-
-    # register handlers AFTER bot.start() so pyrogram actually keeps them
+    # register handlers BEFORE starting the bot
     start.register(bot)
     player.register(bot)
     settings.register(bot)
@@ -118,6 +115,9 @@ async def main() -> None:
     bot.on_message(filters.command("ping") & filters.private, _dm_ping)
     bot.on_message(filters.private, _dm_any)
     log.info("Handlers registered")
+
+    await bot.start()
+    log.info("Bot client started")
 
     await _maybe_start_user_streamer(bot, db)
 
