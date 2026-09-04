@@ -45,9 +45,9 @@ def register(app: Client) -> None:
     @rate_limited
     async def _start(client: Client, message: Message):
         user = message.from_user
-        print(f"CREATESESSION TRIGGERED by {user.id if user else 'None'}")
+        print(f"[CREATESESSION] cmd by user={user.id if user else 'None'}, owner={config.OWNER_ID}")
         if not user or not guard.is_owner(user.id):
-            print(f"  -> not owner: {user.id if user else 'None'} vs {config.OWNER_ID}")
+            print("[CREATESESSION] reject: not owner")
             await send_or_edit(message, "🔒 Owner only.")
             return
         if not config.API_ID or not config.API_HASH or not config.BOT_TOKEN:
@@ -58,26 +58,27 @@ def register(app: Client) -> None:
             "createsession",
             data={"step": "API_ID", "started_at": int(time.time())},
         )
+        print("[CREATESESSION] pending set, sending prompt")
         await send_or_edit(message, "🧾 **Create Streamer Session**\n\n" + _STEP["API_ID"])
 
     @app.on_message(filters.private, group=4)
     async def _step(client: Client, message: Message):
         user = message.from_user
-        print(f"PRIVATE MSG from {user.id if user else 'None'}: {(message.text or '')[:50]}")
-        if not user or not message.text:
-            print("  -> skip: no user or no text")
+        text = message.text.strip() if message.text else ""
+        print(f"[CREATESESSION] private msg from={user.id if user else 'None'}, text={text[:40]}")
+        if not user or not text:
+            print("[CREATESESSION] skip: no user/text")
             return
         if not guard.is_owner(user.id):
-            print(f"  -> skip: not owner {user.id}")
+            print(f"[CREATESESSION] skip: not owner {user.id}")
             return
         req = ctx.pending.pop(user.id)
         if not req or req.get("action") != "createsession":
-            print(f"  -> skip: no pending createsession (action={req.get('action') if req else 'None'})")
+            print(f"[CREATESESSION] skip: no pending createsession (action={req.get('action') if req else 'None'})")
             return
         data = req.get("data") or {}
         step = data.get("step")
-        text = message.text.strip()
-        print(f"  -> processing step={step}, text={text[:20]}")
+        print(f"[CREATESESSION] processing step={step}")
         try:
             if step == "API_ID":
                 api_id = int(text)
@@ -147,9 +148,10 @@ def register(app: Client) -> None:
                 await send_or_edit(message, "❌ Unknown step. Try `/createsession` again.")
                 return
         except Exception as e:
-            print(f"  -> ERROR in step handler: {e}")
+            print(f"[CREATESESSION] ERROR: {e}")
             await send_or_edit(message, f"❌ Error: `{e}`")
             return
+        print(f"[CREATESESSION] saving pending, next_step={data.get('step')}")
         ctx.pending.set(user.id, "createsession", data=data)
 
 
