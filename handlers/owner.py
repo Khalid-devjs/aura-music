@@ -113,6 +113,9 @@ def register(app: Client) -> None:
         if not req:
             return
         action = req["action"]
+        if action not in ("owner_ban_user", "owner_unban_user", "owner_ban_group", "owner_unban_group"):
+            ctx.pending.set(user.id, action, **(req.get("data") or {}))
+            return
         text = message.text.strip()
 
         if action in ("owner_ban_user", "owner_unban_user"):

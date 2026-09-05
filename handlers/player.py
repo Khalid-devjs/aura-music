@@ -84,10 +84,11 @@ def register(app: Client) -> None:
                 "data": {"chat_id": message.chat.id},
             }
         action = req["action"]
-        target_chat = req["data"].get("chat_id") or message.chat.id
-
         if action not in ("play_music", "play_video"):
+            # not a play request — put it back for other handlers
+            ctx.pending.set(user.id, action, **(req.get("data") or {}))
             return
+        target_chat = req["data"].get("chat_id") or message.chat.id
         is_video = action == "play_video"
 
         # ONLY group admins / bot admins / owner may PLAY music or video.
